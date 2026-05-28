@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,7 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.CameraPosition
@@ -46,34 +44,36 @@ import com.google.maps.android.compose.rememberCameraPositionState
 
 @Composable
 fun MapRouteScreen(
-    routePoints: List<LatLng>,
+    stopPoints: List<LatLng>,
+    routePolylinePoints: List<LatLng>,
     locationNames: List<String> = emptyList(),
     onBackClick: () -> Unit,
     onEditLocationsClick: () -> Unit,
     onStartNavigationClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    val defaultLocation = LatLng(-34.9011, -56.1645) // Montevideo
+    val defaultLocation = LatLng(-34.9011, -56.1645)
+    val cameraPoints = routePolylinePoints.ifEmpty { stopPoints }
 
     val cameraPositionState = rememberCameraPositionState {
         position = CameraPosition.fromLatLngZoom(
-            routePoints.firstOrNull() ?: defaultLocation,
-            if (routePoints.isEmpty()) 11f else 13f
+            cameraPoints.firstOrNull() ?: defaultLocation,
+            if (cameraPoints.isEmpty()) 11f else 13f
         )
     }
 
-    LaunchedEffect(routePoints) {
+    LaunchedEffect(cameraPoints) {
         when {
-            routePoints.size == 1 -> {
+            cameraPoints.size == 1 -> {
                 cameraPositionState.animate(
-                    CameraUpdateFactory.newLatLngZoom(routePoints.first(), 15f)
+                    CameraUpdateFactory.newLatLngZoom(cameraPoints.first(), 15f)
                 )
             }
 
-            routePoints.size > 1 -> {
+            cameraPoints.size > 1 -> {
                 val boundsBuilder = LatLngBounds.builder()
 
-                routePoints.forEach { point ->
+                cameraPoints.forEach { point ->
                     boundsBuilder.include(point)
                 }
 
@@ -108,8 +108,8 @@ fun MapRouteScreen(
                 .padding(innerPadding)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            MapHeader(
-                totalStops = routePoints.size,
+            RouteHeader(
+                totalStops = stopPoints.size,
                 onBackClick = onBackClick
             )
 
@@ -124,26 +124,25 @@ fun MapRouteScreen(
                     properties = mapProperties,
                     uiSettings = mapUiSettings
                 ) {
-                    routePoints.forEachIndexed { index, point ->
+                    stopPoints.forEachIndexed { index, point ->
                         Marker(
                             state = MarkerState(position = point),
-                            title = getMarkerTitle(index, routePoints.size),
+                            title = getMarkerTitle(index, stopPoints.size),
                             snippet = locationNames.getOrNull(index) ?: "Parada ${index + 1}"
                         )
                     }
 
-                    if (routePoints.size >= 2) {
+                    if (routePolylinePoints.size >= 2) {
                         Polyline(
-                            points = routePoints,
+                            points = routePolylinePoints,
                             color = Color(0xFF1565C0),
-                            width = 10f,
-                            geodesic = true
+                            width = 10f
                         )
                     }
                 }
 
-                if (routePoints.isEmpty()) {
-                    EmptyMapMessage(
+                if (stopPoints.isEmpty()) {
+                    EmptyRouteMessage(
                         modifier = Modifier
                             .align(Alignment.Center)
                             .padding(24.dp)
@@ -152,7 +151,7 @@ fun MapRouteScreen(
             }
 
             RouteBottomPanel(
-                routePoints = routePoints,
+                stopPoints = stopPoints,
                 locationNames = locationNames,
                 onEditLocationsClick = onEditLocationsClick,
                 onStartNavigationClick = onStartNavigationClick
@@ -162,13 +161,12 @@ fun MapRouteScreen(
 }
 
 @Composable
-private fun MapHeader(
+private fun RouteHeader(
     totalStops: Int,
-    onBackClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onBackClick: () -> Unit
 ) {
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -184,7 +182,7 @@ private fun MapHeader(
             horizontalAlignment = Alignment.End
         ) {
             Text(
-                text = "Ruta optimizada",
+                text = "Ruta por calles",
                 style = MaterialTheme.typography.titleLarge,
                 fontWeight = FontWeight.Bold
             )
@@ -200,19 +198,16 @@ private fun MapHeader(
 
 @Composable
 private fun RouteBottomPanel(
-    routePoints: List<LatLng>,
+    stopPoints: List<LatLng>,
     locationNames: List<String>,
     onEditLocationsClick: () -> Unit,
-    onStartNavigationClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onStartNavigationClick: () -> Unit
 ) {
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(
             topStart = 24.dp,
-            topEnd = 24.dp,
-            bottomStart = 0.dp,
-            bottomEnd = 0.dp
+            topEnd = 24.dp
         ),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -222,40 +217,29 @@ private fun RouteBottomPanel(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .fillMaxHeight(0.42f)
                 .padding(20.dp)
         ) {
             Text(
-                text = "Orden de recorrido",
+                text = "Orden del recorrido",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
             )
 
             Spacer(modifier = Modifier.height(10.dp))
 
-            if (routePoints.isEmpty()) {
-                Text(
-                    text = "No hay ubicaciones para mostrar.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f),
-                    contentPadding = PaddingValues(vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    itemsIndexed(routePoints) { index, point ->
-                        RouteStopItem(
-                            number = index + 1,
-                            title = getStopTitle(index, routePoints.size),
-                            address = locationNames.getOrNull(index),
-                            latitude = point.latitude,
-                            longitude = point.longitude
-                        )
-                    }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp),
+                contentPadding = PaddingValues(vertical = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                itemsIndexed(stopPoints) { index, point ->
+                    RouteStopItem(
+                        number = index + 1,
+                        name = locationNames.getOrNull(index) ?: "Parada ${index + 1}",
+                        point = point
+                    )
                 }
             }
 
@@ -265,7 +249,7 @@ private fun RouteBottomPanel(
                 onClick = onStartNavigationClick,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
-                enabled = routePoints.size >= 2
+                enabled = stopPoints.size >= 2
             ) {
                 Text(text = "Iniciar recorrido")
             }
@@ -286,14 +270,11 @@ private fun RouteBottomPanel(
 @Composable
 private fun RouteStopItem(
     number: Int,
-    title: String,
-    address: String?,
-    latitude: Double,
-    longitude: Double,
-    modifier: Modifier = Modifier
+    name: String,
+    point: LatLng
 ) {
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -302,51 +283,25 @@ private fun RouteStopItem(
         Column(
             modifier = Modifier.padding(14.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.Top
-            ) {
-                Text(
-                    text = "$number.",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+            Text(
+                text = "$number. $name",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
 
-                Spacer(modifier = Modifier.padding(horizontal = 5.dp))
+            Spacer(modifier = Modifier.height(4.dp))
 
-                Column {
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    if (!address.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(3.dp))
-
-                        Text(
-                            text = address,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(3.dp))
-
-                    Text(
-                        text = "Lat: ${formatCoordinate(latitude)} | Lng: ${formatCoordinate(longitude)}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
+            Text(
+                text = "Lat: ${formatCoordinate(point.latitude)} | Lng: ${formatCoordinate(point.longitude)}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 @Composable
-private fun EmptyMapMessage(
+private fun EmptyRouteMessage(
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -370,7 +325,7 @@ private fun EmptyMapMessage(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = "Agregá ubicaciones para poder visualizar el recorrido en el mapa.",
+                text = "Seleccioná ubicaciones para calcular el recorrido.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -389,39 +344,6 @@ private fun getMarkerTitle(
     }
 }
 
-private fun getStopTitle(
-    index: Int,
-    totalStops: Int
-): String {
-    return when (index) {
-        0 -> "Punto de inicio"
-        totalStops - 1 -> "Destino final"
-        else -> "Parada intermedia"
-    }
-}
-
 private fun formatCoordinate(value: Double): String {
     return "%.5f".format(value)
-}
-
-@Preview(showBackground = true)
-@Composable
-private fun MapRouteScreenPreview() {
-    MaterialTheme {
-        MapRouteScreen(
-            routePoints = listOf(
-                LatLng(-34.9011, -56.1645),
-                LatLng(-34.9055, -56.1851),
-                LatLng(-34.8836, -56.1819)
-            ),
-            locationNames = listOf(
-                "Centro, Montevideo",
-                "Parque Rodó, Montevideo",
-                "Tres Cruces, Montevideo"
-            ),
-            onBackClick = {},
-            onEditLocationsClick = {},
-            onStartNavigationClick = {}
-        )
-    }
 }

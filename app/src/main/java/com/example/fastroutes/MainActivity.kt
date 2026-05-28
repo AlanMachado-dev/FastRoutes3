@@ -1,33 +1,58 @@
 package com.example.fastroutes
 
-
+import android.Manifest
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import com.google.android.gms.maps.model.LatLng
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.example.fastroutes.data.model.SavedLocation
+import com.example.fastroutes.location.CurrentLocationProvider
+import com.example.fastroutes.network.RoutesApiService
+import com.example.fastroutes.network.buildComputeRoutesRequest
 import com.example.fastroutes.ui.screens.AddLocationsScreen
 import com.example.fastroutes.ui.screens.HomeScreen
 import com.example.fastroutes.ui.screens.MapRouteScreen
+import com.example.fastroutes.utils.PolylineDecoder
+import com.google.android.gms.maps.model.LatLng
+import kotlinx.coroutines.launch
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 
 class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        enableEdgeToEdge()
-
         setContent {
             MaterialTheme {
                 Surface {
-                    RutaOptimaApp()
+                    FastRoutesApp()
                 }
             }
         }
@@ -35,12 +60,28 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun RutaOptimaApp() {
+private fun FastRoutesApp() {
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
+
+    val routesApiService = remember {
+        RoutesApiService.create()
+    }
+
+    val fixedDestination = LatLng(
+        -34.761394496810844,
+        -55.59526743441916
+    )
+
     var currentScreen by remember {
         mutableStateOf(AppScreen.Home)
     }
 
-    var routePoints by remember {
+    var stopPoints by remember {
+        mutableStateOf<List<LatLng>>(emptyList())
+    }
+
+    var routePolylinePoints by remember {
         mutableStateOf<List<LatLng>>(emptyList())
     }
 
@@ -48,67 +89,300 @@ private fun RutaOptimaApp() {
         mutableStateOf<List<String>>(emptyList())
     }
 
-    when (currentScreen) {
-        AppScreen.Home -> {
-            HomeScreen(
-                onAddLocationsClick = {
-                    currentScreen = AppScreen.AddLocations
-                },
-                onMapClick = {
-                    currentScreen = AppScreen.MapRoute
-                },
-                onHistoryClick = {
-                    // Más adelante podés crear HistoryScreen
-                }
-            )
+    var isLoading by remember {
+        mutableStateOf(false)
+    }
+
+    var errorMessage by remember {
+        mutableStateOf<String?>(null)
+    }
+
+    var pendingSelectedLocations by remember {
+        mutableStateOf<List<SavedLocation>>(emptyList())
+    }
+
+    fun calculateRouteFromCurrentLocation(
+        selectedLocations: List<SavedLocation>
+    ) {
+        if (selectedLocations.isEmpty()) {
+            errorMessage = "Seleccioná al menos 1 ubicación."
+            return
         }
 
-        AppScreen.AddLocations -> {
-            AddLocationsScreen(
-                onBackClick = {
-                    currentScreen = AppScreen.Home
-                },
-                onCalculateRouteClick = { locations ->
-                    locationNames = locations
+        coroutineScope.launch {
+            isLoading = true
+            errorMessage = null
 
-                    /*
-                     * Temporal:
-                     * AddLocationsScreen por ahora devuelve textos, no coordenadas reales.
-                     * Para poder probar el mapa, generamos coordenadas demo.
-                     *
-                     * Después esto se reemplaza por:
-                     * - Google Geocoding API
-                     * - Places API
-                     * - Autocomplete de Google Maps
-                     * - Backend propio
-                     */
-                    routePoints = locations.mapIndexed { index, location ->
-                        demoCoordinatesFor(
-                            index = index,
-                            location = location
-                        )
+            try {
+                val apiKey = BuildConfig.ROUTES_API_KEY
+
+                if (apiKey.isBlank()) {
+                    errorMessage = "Falta configurar ROUTES_API_KEY en local.properties."
+                    return@launch
+                }
+
+                val currentLocation = CurrentLocationProvider.getCurrentLatLng(context)
+
+                if (currentLocation == null) {
+                    errorMessage = "No se pudo obtener tu ubicación actual. Revisá permisos y GPS."
+                    return@launch
+                }
+
+                val selectedPoints = selectedLocations.map { location ->
+                    location.toLatLng()
+                }
+
+                val pointsForRoute = listOf(currentLocation) + selectedPoints + listOf(fixedDestination)
+
+                val request = buildComputeRoutesRequest(
+                    points = pointsForRoute,
+                    optimizeWaypointOrder = true
+                )
+
+                val response = routesApiService.computeRoutes(
+                    apiKey = apiKey,
+                    request = request
+                )
+
+                if (!response.isSuccessful) {
+                    val errorBody = response.errorBody()?.string()
+                    errorMessage = "Error de Routes API: ${response.code()} ${errorBody.orEmpty()}"
+                    return@launch
+                }
+
+                val route = response.body()
+                    ?.routes
+                    ?.firstOrNull()
+
+                if (route == null) {
+                    errorMessage = "Google Routes API no devolvió ninguna ruta."
+                    return@launch
+                }
+
+                val encodedPolyline = route.polyline?.encodedPolyline
+
+                if (encodedPolyline.isNullOrBlank()) {
+                    errorMessage = "Google Routes API no devolvió la polyline de la ruta."
+                    return@launch
+                }
+
+                val orderedSelectedLocations = applyOptimizedSelectedLocations(
+                    selectedLocations = selectedLocations,
+                    optimizedIntermediateIndexes = route.optimizedIntermediateWaypointIndex
+                )
+
+                val decodedPolyline = PolylineDecoder.decode(encodedPolyline)
+
+                if (decodedPolyline.isEmpty()) {
+                    errorMessage = "No se pudo decodificar la ruta por calles."
+                    return@launch
+                }
+
+                stopPoints = listOf(currentLocation) +
+                        orderedSelectedLocations.map { location -> location.toLatLng() } +
+                        listOf(fixedDestination)
+
+                routePolylinePoints = decodedPolyline
+
+                locationNames = listOf("Mi ubicación actual") +
+                        orderedSelectedLocations.map { location -> location.address ?: location.name } +
+                        listOf("Destino final")
+
+                currentScreen = AppScreen.MapRoute
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Ocurrió un error al calcular la ruta."
+            } finally {
+                isLoading = false
+            }
+        }
+    }
+
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            calculateRouteFromCurrentLocation(pendingSelectedLocations)
+        } else {
+            errorMessage = "Necesitás permitir la ubicación para usarla como punto de partida."
+        }
+    }
+
+    fun startRouteCalculation(
+        selectedLocations: List<SavedLocation>
+    ) {
+        pendingSelectedLocations = selectedLocations
+
+        if (CurrentLocationProvider.hasLocationPermission(context)) {
+            calculateRouteFromCurrentLocation(selectedLocations)
+        } else {
+            locationPermissionLauncher.launch(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+    }
+
+    Box(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        when (currentScreen) {
+            AppScreen.Home -> {
+                HomeScreen(
+                    onAddLocationsClick = {
+                        currentScreen = AppScreen.AddLocations
+                    },
+                    onMapClick = {
+                        currentScreen = AppScreen.MapRoute
+                    },
+                    onHistoryClick = {}
+                )
+            }
+
+            AppScreen.AddLocations -> {
+                AddLocationsScreen(
+                    onBackClick = {
+                        currentScreen = AppScreen.Home
+                    },
+                    onCalculateRouteClick = { selectedLocations ->
+                        startRouteCalculation(selectedLocations)
                     }
+                )
+            }
 
-                    currentScreen = AppScreen.MapRoute
+            AppScreen.MapRoute -> {
+                MapRouteScreen(
+                    stopPoints = stopPoints,
+                    routePolylinePoints = routePolylinePoints,
+                    locationNames = locationNames,
+                    onBackClick = {
+                        currentScreen = AppScreen.Home
+                    },
+                    onEditLocationsClick = {
+                        currentScreen = AppScreen.AddLocations
+                    },
+                    onStartNavigationClick = {
+                        if (stopPoints.size < 2) {
+                            errorMessage = "No hay una ruta válida para iniciar."
+                        } else {
+                            openGoogleMapsRoute(
+                                context = context,
+                                points = stopPoints
+                            )
+                        }
+                    }
+                )
+            }
+        }
+
+        if (isLoading) {
+            LoadingRouteOverlay()
+        }
+
+        if (errorMessage != null) {
+            AlertDialog(
+                onDismissRequest = {
+                    errorMessage = null
+                },
+                title = {
+                    Text(text = "Error")
+                },
+                text = {
+                    Text(text = errorMessage ?: "")
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            errorMessage = null
+                        }
+                    ) {
+                        Text(text = "Aceptar")
+                    }
                 }
             )
         }
+    }
+}
 
-        AppScreen.MapRoute -> {
-            MapRouteScreen(
-                routePoints = routePoints,
-                locationNames = locationNames,
-                onBackClick = {
-                    currentScreen = AppScreen.Home
-                },
-                onEditLocationsClick = {
-                    currentScreen = AppScreen.AddLocations
-                },
-                onStartNavigationClick = {
-                    // Más adelante: abrir Google Maps, Waze o navegación interna
-                }
+@Composable
+private fun LoadingRouteOverlay() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.35f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .background(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = MaterialTheme.shapes.large
+                )
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator()
+
+            Text(
+                text = "Calculando ruta desde tu ubicación actual...",
+                modifier = Modifier.padding(top = 14.dp),
+                color = MaterialTheme.colorScheme.onSurface
             )
         }
+    }
+}
+
+private fun applyOptimizedSelectedLocations(
+    selectedLocations: List<SavedLocation>,
+    optimizedIntermediateIndexes: List<Int>
+): List<SavedLocation> {
+    if (selectedLocations.isEmpty() || optimizedIntermediateIndexes.isEmpty()) {
+        return selectedLocations
+    }
+
+    return optimizedIntermediateIndexes.mapNotNull { index ->
+        selectedLocations.getOrNull(index)
+    }
+}
+
+private fun openGoogleMapsRoute(
+    context: Context,
+    points: List<LatLng>
+) {
+    if (points.size < 2) return
+
+    val origin = points.first()
+    val destination = points.last()
+    val waypoints = points.drop(1).dropLast(1)
+
+    val originText = "${origin.latitude},${origin.longitude}"
+    val destinationText = "${destination.latitude},${destination.longitude}"
+
+    val uriBuilder = Uri.Builder()
+        .scheme("https")
+        .authority("www.google.com")
+        .path("maps/dir/")
+        .appendQueryParameter("api", "1")
+        .appendQueryParameter("origin", originText)
+        .appendQueryParameter("destination", destinationText)
+        .appendQueryParameter("travelmode", "driving")
+
+    if (waypoints.isNotEmpty()) {
+        val waypointsText = waypoints.joinToString("|") { point ->
+            "${point.latitude},${point.longitude}"
+        }
+
+        uriBuilder.appendQueryParameter("waypoints", waypointsText)
+    }
+
+    val mapsUri = uriBuilder.build()
+
+    val googleMapsIntent = Intent(Intent.ACTION_VIEW, mapsUri).apply {
+        setPackage("com.google.android.apps.maps")
+    }
+
+    try {
+        context.startActivity(googleMapsIntent)
+    } catch (e: ActivityNotFoundException) {
+        val browserIntent = Intent(Intent.ACTION_VIEW, mapsUri)
+        context.startActivity(browserIntent)
     }
 }
 
@@ -116,60 +390,4 @@ private enum class AppScreen {
     Home,
     AddLocations,
     MapRoute
-}
-
-private fun demoCoordinatesFor(
-    index: Int,
-    location: String
-): LatLng {
-    val normalizedLocation = location.lowercase()
-
-    return when {
-        "montevideo" in normalizedLocation || "centro" in normalizedLocation -> {
-            LatLng(-34.9011, -56.1645)
-        }
-
-        "tres cruces" in normalizedLocation -> {
-            LatLng(-34.8937, -56.1666)
-        }
-
-        "parque rodó" in normalizedLocation || "parque rodo" in normalizedLocation -> {
-            LatLng(-34.9127, -56.1646)
-        }
-
-        "punta carretas" in normalizedLocation -> {
-            LatLng(-34.9227, -56.1594)
-        }
-
-        "pocitos" in normalizedLocation -> {
-            LatLng(-34.9087, -56.1507)
-        }
-
-        "malvín" in normalizedLocation || "malvin" in normalizedLocation -> {
-            LatLng(-34.8948, -56.1056)
-        }
-
-        "ciudad de la costa" in normalizedLocation -> {
-            LatLng(-34.8167, -55.9500)
-        }
-
-        "san luis" in normalizedLocation -> {
-            LatLng(-34.7748, -55.5847)
-        }
-
-        "canelones" in normalizedLocation -> {
-            LatLng(-34.5228, -56.2778)
-        }
-
-        else -> {
-            /*
-             * Coordenadas demo cerca de Montevideo.
-             * Esto evita que todos los puntos queden exactamente encima.
-             */
-            LatLng(
-                -34.9011 + index * 0.012,
-                -56.1645 + index * 0.015
-            )
-        }
-    }
 }
