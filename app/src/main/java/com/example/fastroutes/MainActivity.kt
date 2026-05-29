@@ -72,6 +72,13 @@ private fun FastRoutesApp() {
         -34.761394496810844,
         -55.59526743441916
     )
+    var navigationSegments by remember {
+        mutableStateOf<List<List<LatLng>>>(emptyList())
+    }
+
+    var currentNavigationSegmentIndex by remember {
+        mutableStateOf(0)
+    }
 
     var currentScreen by remember {
         mutableStateOf(AppScreen.Home)
@@ -128,50 +135,47 @@ private fun FastRoutesApp() {
                     return@launch
                 }
 
-                val selectedPoints = selectedLocations.map { location ->
-                    location.toLatLng()
-                }
-
-                val pointsForRoute = listOf(currentLocation) + selectedPoints + listOf(fixedDestination)
-
-                val request = buildComputeRoutesRequest(
-                    points = pointsForRoute,
-                    optimizeWaypointOrder = true
+                val orderedSelectedLocations = orderStopsByNearestNeighbor(
+                    currentLocation = currentLocation,
+                    selectedLocations = selectedLocations
                 )
 
-                val response = routesApiService.computeRoutes(
+                val pointsForRoute = listOf(currentLocation) +
+                        orderedSelectedLocations.map { location -> location.toLatLng() } +
+                        listOf(fixedDestination)
+
+                val decodedPolyline = computeRoutePolylineInChunks(
+                    routesApiService = routesApiService,
                     apiKey = apiKey,
-                    request = request
+                    orderedPoints = pointsForRoute
                 )
 
-                if (!response.isSuccessful) {
-                    val errorBody = response.errorBody()?.string()
-                    errorMessage = "Error de Routes API: ${response.code()} ${errorBody.orEmpty()}"
+                if (decodedPolyline.isEmpty()) {
+                    errorMessage = "No se pudo calcular la ruta completa por calles."
                     return@launch
                 }
 
-                val route = response.body()
-                    ?.routes
-                    ?.firstOrNull()
+                stopPoints = pointsForRoute
+                routePolylinePoints = decodedPolyline
 
-                if (route == null) {
-                    errorMessage = "Google Routes API no devolvió ninguna ruta."
-                    return@launch
-                }
+                locationNames = listOf("Mi ubicación actual") +
+                        orderedSelectedLocations.map { location -> location.address ?: location.name } +
+                        listOf("Destino final")
 
-                val encodedPolyline = route.polyline?.encodedPolyline
-
-                if (encodedPolyline.isNullOrBlank()) {
-                    errorMessage = "Google Routes API no devolvió la polyline de la ruta."
-                    return@launch
-                }
-
-                val orderedSelectedLocations = applyOptimizedSelectedLocations(
-                    selectedLocations = selectedLocations,
-                    optimizedIntermediateIndexes = route.optimizedIntermediateWaypointIndex
+                navigationSegments = splitRoutePoints(
+                    points = pointsForRoute,
+                    maxIntermediateWaypoints = 8
                 )
 
-                val decodedPolyline = PolylineDecoder.decode(encodedPolyline)
+                currentNavigationSegmentIndex = 0
+
+                currentScreen = AppScreen.MapRoute
+
+
+
+
+
+
 
                 if (decodedPolyline.isEmpty()) {
                     errorMessage = "No se pudo decodificar la ruta por calles."
@@ -258,13 +262,19 @@ private fun FastRoutesApp() {
                         currentScreen = AppScreen.AddLocations
                     },
                     onStartNavigationClick = {
-                        if (stopPoints.size < 2) {
-                            errorMessage = "No hay una ruta válida para iniciar."
+                        val currentSegment = navigationSegments.getOrNull(currentNavigationSegmentIndex)
+
+                        if (currentSegment == null) {
+                            errorMessage = "No hay más tramos disponibles."
                         } else {
                             openGoogleMapsRoute(
                                 context = context,
-                                points = stopPoints
+                                points = currentSegment
                             )
+
+                            if (currentNavigationSegmentIndex < navigationSegments.lastIndex) {
+                                currentNavigationSegmentIndex += 1
+                            }
                         }
                     }
                 )
@@ -385,7 +395,136 @@ private fun openGoogleMapsRoute(
         context.startActivity(browserIntent)
     }
 }
+private suspend fun computeRoutePolylineInChunks(
+    routesApiService: RoutesApiService,
+    apiKey: String,
+    orderedPoints: List<LatLng>
+): List<LatLng> {
+    val routeChunks = splitRoutePoints(
+        points = orderedPoints,
+        maxIntermediateWaypoints = 25
+    )
 
+    val fullPolyline = mutableListOf<LatLng>()
+
+    routeChunks.forEachIndexed { index, chunkPoints ->
+        val request = buildComputeRoutesRequest(
+            points = chunkPoints,
+            optimizeWaypointOrder = false
+        )
+
+        val response = routesApiService.computeRoutes(
+            apiKey = apiKey,
+            request = request
+        )
+
+        if (!response.isSuccessful) {
+            val errorBody = response.errorBody()?.string()
+            throw Exception("Error de Routes API: ${response.code()} ${errorBody.orEmpty()}")
+        }
+
+        val route = response.body()
+            ?.routes
+            ?.firstOrNull()
+            ?: throw Exception("Google Routes API no devolvió ruta en uno de los tramos.")
+
+        val encodedPolyline = route.polyline
+            ?.encodedPolyline
+            ?: throw Exception("Google Routes API no devolvió polyline en uno de los tramos.")
+
+        val decodedChunk = PolylineDecoder.decode(encodedPolyline)
+
+        if (decodedChunk.isNotEmpty()) {
+            if (index == 0) {
+                fullPolyline.addAll(decodedChunk)
+            } else {
+                fullPolyline.addAll(decodedChunk.drop(1))
+            }
+        }
+    }
+
+    return fullPolyline
+}
+
+private fun splitRoutePoints(
+    points: List<LatLng>,
+    maxIntermediateWaypoints: Int
+): List<List<LatLng>> {
+    if (points.size < 2) return emptyList()
+
+    val maxPointsPerRequest = maxIntermediateWaypoints + 2
+
+    if (points.size <= maxPointsPerRequest) {
+        return listOf(points)
+    }
+
+    val chunks = mutableListOf<List<LatLng>>()
+    var startIndex = 0
+
+    while (startIndex < points.lastIndex) {
+        val endIndex = minOf(
+            startIndex + maxPointsPerRequest - 1,
+            points.lastIndex
+        )
+
+        chunks.add(points.subList(startIndex, endIndex + 1))
+
+        startIndex = endIndex
+    }
+
+    return chunks
+}
+
+private fun orderStopsByNearestNeighbor(
+    currentLocation: LatLng,
+    selectedLocations: List<SavedLocation>
+): List<SavedLocation> {
+    val pendingLocations = selectedLocations.toMutableList()
+    val orderedLocations = mutableListOf<SavedLocation>()
+
+    var currentPoint = currentLocation
+
+    while (pendingLocations.isNotEmpty()) {
+        val nearestLocation = pendingLocations.minBy { location ->
+            distanceKm(
+                from = currentPoint,
+                to = location.toLatLng()
+            )
+        }
+
+        orderedLocations.add(nearestLocation)
+        pendingLocations.remove(nearestLocation)
+        currentPoint = nearestLocation.toLatLng()
+    }
+
+    return orderedLocations
+}
+
+private fun distanceKm(
+    from: LatLng,
+    to: LatLng
+): Double {
+    val earthRadiusKm = 6371.0
+
+    val latitudeDistance = Math.toRadians(to.latitude - from.latitude)
+    val longitudeDistance = Math.toRadians(to.longitude - from.longitude)
+
+    val fromLatitudeRadians = Math.toRadians(from.latitude)
+    val toLatitudeRadians = Math.toRadians(to.latitude)
+
+    val a = kotlin.math.sin(latitudeDistance / 2) * kotlin.math.sin(latitudeDistance / 2) +
+            kotlin.math.cos(fromLatitudeRadians) *
+            kotlin.math.cos(toLatitudeRadians) *
+            kotlin.math.sin(longitudeDistance / 2) *
+            kotlin.math.sin(longitudeDistance / 2)
+
+    val c = 2 * kotlin.math.atan2(
+        kotlin.math.sqrt(a),
+        kotlin.math.sqrt(1 - a)
+    )
+
+    return earthRadiusKm * c
+}
 private enum class AppScreen {
     Home,
     AddLocations,
