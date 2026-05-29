@@ -255,6 +255,8 @@ private fun FastRoutesApp() {
                     stopPoints = stopPoints,
                     routePolylinePoints = routePolylinePoints,
                     locationNames = locationNames,
+                    currentSegmentIndex = currentNavigationSegmentIndex,
+                    totalSegments = navigationSegments.size,
                     onBackClick = {
                         currentScreen = AppScreen.Home
                     },
@@ -272,9 +274,7 @@ private fun FastRoutesApp() {
                                 points = currentSegment
                             )
 
-                            if (currentNavigationSegmentIndex < navigationSegments.lastIndex) {
-                                currentNavigationSegmentIndex += 1
-                            }
+                            currentNavigationSegmentIndex += 1
                         }
                     }
                 )

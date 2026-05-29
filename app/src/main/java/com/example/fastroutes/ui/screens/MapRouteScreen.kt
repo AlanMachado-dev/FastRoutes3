@@ -47,6 +47,8 @@ fun MapRouteScreen(
     stopPoints: List<LatLng>,
     routePolylinePoints: List<LatLng>,
     locationNames: List<String> = emptyList(),
+    currentSegmentIndex: Int = 0,
+    totalSegments: Int = 0,
     onBackClick: () -> Unit,
     onEditLocationsClick: () -> Unit,
     onStartNavigationClick: () -> Unit = {},
@@ -110,6 +112,7 @@ fun MapRouteScreen(
         ) {
             RouteHeader(
                 totalStops = stopPoints.size,
+                totalSegments = totalSegments,
                 onBackClick = onBackClick
             )
 
@@ -153,6 +156,8 @@ fun MapRouteScreen(
             RouteBottomPanel(
                 stopPoints = stopPoints,
                 locationNames = locationNames,
+                currentSegmentIndex = currentSegmentIndex,
+                totalSegments = totalSegments,
                 onEditLocationsClick = onEditLocationsClick,
                 onStartNavigationClick = onStartNavigationClick
             )
@@ -163,6 +168,7 @@ fun MapRouteScreen(
 @Composable
 private fun RouteHeader(
     totalStops: Int,
+    totalSegments: Int,
     onBackClick: () -> Unit
 ) {
     Row(
@@ -188,21 +194,31 @@ private fun RouteHeader(
             )
 
             Text(
-                text = "$totalStops paradas",
+                text = "$totalStops paradas • $totalSegments tramos",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
 }
-
 @Composable
 private fun RouteBottomPanel(
     stopPoints: List<LatLng>,
     locationNames: List<String>,
+    currentSegmentIndex: Int,
+    totalSegments: Int,
     onEditLocationsClick: () -> Unit,
     onStartNavigationClick: () -> Unit
 ) {
+    val currentSegmentNumber = currentSegmentIndex + 1
+    val hasPendingSegment = totalSegments > 0 && currentSegmentIndex < totalSegments
+
+    val buttonText = when {
+        totalSegments == 0 -> "Sin tramos disponibles"
+        hasPendingSegment -> "Iniciar tramo $currentSegmentNumber/$totalSegments"
+        else -> "Recorrido completo"
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(
@@ -223,6 +239,21 @@ private fun RouteBottomPanel(
                 text = "Orden del recorrido",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Text(
+                text = if (hasPendingSegment) {
+                    "Próximo tramo: $currentSegmentNumber de $totalSegments"
+                } else if (totalSegments > 0) {
+                    "Todos los tramos fueron iniciados"
+                } else {
+                    "No hay tramos cargados"
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold
             )
 
             Spacer(modifier = Modifier.height(10.dp))
@@ -249,9 +280,9 @@ private fun RouteBottomPanel(
                 onClick = onStartNavigationClick,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(16.dp),
-                enabled = stopPoints.size >= 2
+                enabled = stopPoints.size >= 2 && hasPendingSegment
             ) {
-                Text(text = "Iniciar recorrido")
+                Text(text = buttonText)
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -266,7 +297,6 @@ private fun RouteBottomPanel(
         }
     }
 }
-
 @Composable
 private fun RouteStopItem(
     number: Int,
