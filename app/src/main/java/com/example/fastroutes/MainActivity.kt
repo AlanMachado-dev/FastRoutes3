@@ -1,8 +1,14 @@
 package com.example.fastroutes
 
 import android.Manifest
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -18,34 +24,35 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.example.fastroutes.data.model.RouteOption
 import com.example.fastroutes.data.model.SavedLocation
+import com.example.fastroutes.data.repository.AuthRepository
 import com.example.fastroutes.location.CurrentLocationProvider
 import com.example.fastroutes.network.RoutesApiService
 import com.example.fastroutes.network.buildComputeRoutesRequest
 import com.example.fastroutes.ui.screens.AddLocationsScreen
 import com.example.fastroutes.ui.screens.HomeScreen
+import com.example.fastroutes.ui.screens.LocationsScreen
+import com.example.fastroutes.ui.screens.LoginScreen
 import com.example.fastroutes.ui.screens.MapRouteScreen
 import com.example.fastroutes.utils.PolylineDecoder
 import com.google.android.gms.maps.model.LatLng
 import kotlinx.coroutines.launch
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import com.example.fastroutes.data.model.RouteOption
-import com.example.fastroutes.ui.screens.LocationsScreen
-import androidx.activity.compose.BackHandler
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 class MainActivity : ComponentActivity() {
 
@@ -71,20 +78,25 @@ private fun FastRoutesApp() {
         RoutesApiService.create()
     }
 
+    val authRepository = remember {
+        AuthRepository()
+    }
+
     val fixedDestination = LatLng(
         -34.761394496810844,
         -55.59526743441916
     )
-    var navigationSegments by remember {
-        mutableStateOf<List<List<LatLng>>>(emptyList())
-    }
-
-    var currentNavigationSegmentIndex by remember {
-        mutableStateOf(0)
-    }
 
     var currentScreen by remember {
         mutableStateOf(AppScreen.Home)
+    }
+
+    var selectedRouteOption by remember {
+        mutableStateOf<RouteOption?>(null)
+    }
+
+    var isAdmin by remember {
+        mutableStateOf(false)
     }
 
     var stopPoints by remember {
@@ -99,6 +111,14 @@ private fun FastRoutesApp() {
         mutableStateOf<List<String>>(emptyList())
     }
 
+    var navigationSegments by remember {
+        mutableStateOf<List<List<LatLng>>>(emptyList())
+    }
+
+    var currentNavigationSegmentIndex by remember {
+        mutableStateOf(0)
+    }
+
     var isLoading by remember {
         mutableStateOf(false)
     }
@@ -110,19 +130,27 @@ private fun FastRoutesApp() {
     var pendingSelectedLocations by remember {
         mutableStateOf<List<SavedLocation>>(emptyList())
     }
-    var selectedRouteOption by remember {
-        mutableStateOf<RouteOption?>(null)
+
+    LaunchedEffect(Unit) {
+        isAdmin = try {
+            authRepository.isAdminLoggedIn()
+        } catch (e: Exception) {
+            false
+        }
     }
 
     fun goBack() {
         when (currentScreen) {
             AppScreen.Home -> {
-                // Si ya estás en Home, no hacemos nada.
-                // Si quisieras cerrar la app desde Home, habría que manejarlo aparte.
+                // En Home no hacemos nada.
             }
 
             AppScreen.Locations -> {
                 currentScreen = AppScreen.Home
+            }
+
+            AppScreen.LoginAdmin -> {
+                currentScreen = AppScreen.Locations
             }
 
             AppScreen.AddLocations -> {
@@ -134,6 +162,7 @@ private fun FastRoutesApp() {
             }
         }
     }
+
     BackHandler(
         enabled = currentScreen != AppScreen.Home
     ) {
@@ -191,7 +220,9 @@ private fun FastRoutesApp() {
                 routePolylinePoints = decodedPolyline
 
                 locationNames = listOf("Mi ubicación actual") +
-                        orderedSelectedLocations.map { location -> location.address ?: location.name } +
+                        orderedSelectedLocations.map { location ->
+                            location.address ?: location.name
+                        } +
                         listOf("Destino final")
 
                 navigationSegments = splitRoutePoints(
@@ -200,30 +231,6 @@ private fun FastRoutesApp() {
                 )
 
                 currentNavigationSegmentIndex = 0
-
-                currentScreen = AppScreen.MapRoute
-
-
-
-
-
-
-
-                if (decodedPolyline.isEmpty()) {
-                    errorMessage = "No se pudo decodificar la ruta por calles."
-                    return@launch
-                }
-
-                stopPoints = listOf(currentLocation) +
-                        orderedSelectedLocations.map { location -> location.toLatLng() } +
-                        listOf(fixedDestination)
-
-                routePolylinePoints = decodedPolyline
-
-                locationNames = listOf("Mi ubicación actual") +
-                        orderedSelectedLocations.map { location -> location.address ?: location.name } +
-                        listOf("Destino final")
-
                 currentScreen = AppScreen.MapRoute
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Ocurrió un error al calcular la ruta."
@@ -259,13 +266,6 @@ private fun FastRoutesApp() {
         modifier = Modifier.fillMaxSize()
     ) {
         when (currentScreen) {
-            AppScreen.Locations -> {
-                LocationsScreen(
-                    onBackClick = {
-                        goBack()
-                    }
-                )
-            }
             AppScreen.Home -> {
                 HomeScreen(
                     onRouteOptionClick = { routeOption ->
@@ -278,11 +278,43 @@ private fun FastRoutesApp() {
                 )
             }
 
+            AppScreen.Locations -> {
+                LocationsScreen(
+                    isAdmin = isAdmin,
+                    onBackClick = {
+                        goBack()
+                    },
+                    onLoginAdminClick = {
+                        currentScreen = AppScreen.LoginAdmin
+                    },
+                    onLogoutAdminClick = {
+                        coroutineScope.launch {
+                            authRepository.logout()
+                            isAdmin = false
+                        }
+                    }
+                )
+            }
+
+            AppScreen.LoginAdmin -> {
+                LoginScreen(
+                    onBackClick = {
+                        currentScreen = AppScreen.Locations
+                    },
+                    onLoginSuccess = {
+                        isAdmin = true
+                        currentScreen = AppScreen.Locations
+                    }
+                )
+            }
+
             AppScreen.AddLocations -> {
                 val routeOption = selectedRouteOption
 
                 if (routeOption == null) {
-                    currentScreen = AppScreen.Home
+                    LaunchedEffect(Unit) {
+                        currentScreen = AppScreen.Home
+                    }
                 } else {
                     AddLocationsScreen(
                         routeOptionId = routeOption.id,
@@ -312,7 +344,9 @@ private fun FastRoutesApp() {
                         currentScreen = AppScreen.AddLocations
                     },
                     onStartNavigationClick = {
-                        val currentSegment = navigationSegments.getOrNull(currentNavigationSegmentIndex)
+                        val currentSegment = navigationSegments.getOrNull(
+                            currentNavigationSegmentIndex
+                        )
 
                         if (currentSegment == null) {
                             errorMessage = "No hay más tramos disponibles."
@@ -333,7 +367,7 @@ private fun FastRoutesApp() {
             LoadingRouteOverlay()
         }
 
-        if (errorMessage != null) {
+        errorMessage?.let { message ->
             AlertDialog(
                 onDismissRequest = {
                     errorMessage = null
@@ -342,7 +376,7 @@ private fun FastRoutesApp() {
                     Text(text = "Error")
                 },
                 text = {
-                    Text(text = errorMessage ?: "")
+                    Text(text = message)
                 },
                 confirmButton = {
                     TextButton(
@@ -387,62 +421,6 @@ private fun LoadingRouteOverlay() {
     }
 }
 
-private fun applyOptimizedSelectedLocations(
-    selectedLocations: List<SavedLocation>,
-    optimizedIntermediateIndexes: List<Int>
-): List<SavedLocation> {
-    if (selectedLocations.isEmpty() || optimizedIntermediateIndexes.isEmpty()) {
-        return selectedLocations
-    }
-
-    return optimizedIntermediateIndexes.mapNotNull { index ->
-        selectedLocations.getOrNull(index)
-    }
-}
-
-private fun openGoogleMapsRoute(
-    context: Context,
-    points: List<LatLng>
-) {
-    if (points.size < 2) return
-
-    val origin = points.first()
-    val destination = points.last()
-    val waypoints = points.drop(1).dropLast(1)
-
-    val originText = "${origin.latitude},${origin.longitude}"
-    val destinationText = "${destination.latitude},${destination.longitude}"
-
-    val uriBuilder = Uri.Builder()
-        .scheme("https")
-        .authority("www.google.com")
-        .path("maps/dir/")
-        .appendQueryParameter("api", "1")
-        .appendQueryParameter("origin", originText)
-        .appendQueryParameter("destination", destinationText)
-        .appendQueryParameter("travelmode", "driving")
-
-    if (waypoints.isNotEmpty()) {
-        val waypointsText = waypoints.joinToString("|") { point ->
-            "${point.latitude},${point.longitude}"
-        }
-
-        uriBuilder.appendQueryParameter("waypoints", waypointsText)
-    }
-
-    val mapsUri = uriBuilder.build()
-
-    val googleMapsIntent = Intent(Intent.ACTION_VIEW, mapsUri).apply {
-        setPackage("com.google.android.apps.maps")
-    }
-
-    try {
-        context.startActivity(googleMapsIntent)
-    } catch (e: ActivityNotFoundException) {
-        val browserIntent = Intent(Intent.ACTION_VIEW, mapsUri)
-        context.startActivity(browserIntent)
-    }
-}
 private suspend fun computeRoutePolylineInChunks(
     routesApiService: RoutesApiService,
     apiKey: String,
@@ -560,22 +538,68 @@ private fun distanceKm(
     val fromLatitudeRadians = Math.toRadians(from.latitude)
     val toLatitudeRadians = Math.toRadians(to.latitude)
 
-    val a = kotlin.math.sin(latitudeDistance / 2) * kotlin.math.sin(latitudeDistance / 2) +
-            kotlin.math.cos(fromLatitudeRadians) *
-            kotlin.math.cos(toLatitudeRadians) *
-            kotlin.math.sin(longitudeDistance / 2) *
-            kotlin.math.sin(longitudeDistance / 2)
+    val a = sin(latitudeDistance / 2) * sin(latitudeDistance / 2) +
+            cos(fromLatitudeRadians) *
+            cos(toLatitudeRadians) *
+            sin(longitudeDistance / 2) *
+            sin(longitudeDistance / 2)
 
-    val c = 2 * kotlin.math.atan2(
-        kotlin.math.sqrt(a),
-        kotlin.math.sqrt(1 - a)
+    val c = 2 * atan2(
+        sqrt(a),
+        sqrt(1 - a)
     )
 
     return earthRadiusKm * c
 }
+
+private fun openGoogleMapsRoute(
+    context: Context,
+    points: List<LatLng>
+) {
+    if (points.size < 2) return
+
+    val origin = points.first()
+    val destination = points.last()
+    val waypoints = points.drop(1).dropLast(1)
+
+    val originText = "${origin.latitude},${origin.longitude}"
+    val destinationText = "${destination.latitude},${destination.longitude}"
+
+    val uriBuilder = Uri.Builder()
+        .scheme("https")
+        .authority("www.google.com")
+        .path("maps/dir/")
+        .appendQueryParameter("api", "1")
+        .appendQueryParameter("origin", originText)
+        .appendQueryParameter("destination", destinationText)
+        .appendQueryParameter("travelmode", "driving")
+
+    if (waypoints.isNotEmpty()) {
+        val waypointsText = waypoints.joinToString("|") { point ->
+            "${point.latitude},${point.longitude}"
+        }
+
+        uriBuilder.appendQueryParameter("waypoints", waypointsText)
+    }
+
+    val mapsUri = uriBuilder.build()
+
+    val googleMapsIntent = Intent(Intent.ACTION_VIEW, mapsUri).apply {
+        setPackage("com.google.android.apps.maps")
+    }
+
+    try {
+        context.startActivity(googleMapsIntent)
+    } catch (e: ActivityNotFoundException) {
+        val browserIntent = Intent(Intent.ACTION_VIEW, mapsUri)
+        context.startActivity(browserIntent)
+    }
+}
+
 private enum class AppScreen {
     Home,
     AddLocations,
     Locations,
+    LoginAdmin,
     MapRoute
 }

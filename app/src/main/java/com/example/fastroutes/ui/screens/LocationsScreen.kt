@@ -1,14 +1,12 @@
 package com.example.fastroutes.ui.screens
 
-import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.model.CameraPosition
-import com.google.android.gms.maps.model.LatLng
-import com.google.maps.android.compose.GoogleMap
-import com.google.maps.android.compose.Marker
-import com.google.maps.android.compose.MarkerState
-import com.google.maps.android.compose.rememberCameraPositionState
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -17,13 +15,21 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -34,35 +40,33 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.example.fastroutes.data.model.SavedLocation
 import com.example.fastroutes.data.repository.LocationsRepository
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.LatLng
+import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.Marker
+import com.google.maps.android.compose.MarkerState
+import com.google.maps.android.compose.rememberCameraPositionState
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
+import kotlinx.coroutines.withContext
 
 @Composable
 fun LocationsScreen(
+    isAdmin: Boolean,
     onBackClick: () -> Unit,
+    onLoginAdminClick: () -> Unit,
+    onLogoutAdminClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val locationsRepository = remember {
@@ -78,19 +82,10 @@ fun LocationsScreen(
     var searchText by remember {
         mutableStateOf("")
     }
+
     var selectedLocation by remember {
         mutableStateOf<SavedLocation?>(null)
     }
-
-    var showLocationForm by remember { mutableStateOf(false) }
-
-    var editingLocation by remember { mutableStateOf<SavedLocation?>(null) }
-
-    var locationToDeactivate by remember { mutableStateOf<SavedLocation?>(null) }
-
-    var assigningLocation by remember { mutableStateOf<SavedLocation?>(null) }
-
-    var showAssignDialog by remember { mutableStateOf(false) }
 
     var isLoading by remember {
         mutableStateOf(true)
@@ -98,6 +93,38 @@ fun LocationsScreen(
 
     var errorMessage by remember {
         mutableStateOf<String?>(null)
+    }
+
+    var showLocationForm by remember {
+        mutableStateOf(false)
+    }
+
+    var editingLocation by remember {
+        mutableStateOf<SavedLocation?>(null)
+    }
+
+    var locationToDeactivate by remember {
+        mutableStateOf<SavedLocation?>(null)
+    }
+
+    var assigningLocation by remember {
+        mutableStateOf<SavedLocation?>(null)
+    }
+
+    var showAssignDialog by remember {
+        mutableStateOf(false)
+    }
+
+    fun reloadLocations() {
+        coroutineScope.launch {
+            try {
+                locations = withContext(Dispatchers.IO) {
+                    locationsRepository.getAllActiveLocations()
+                }
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "No se pudieron cargar las ubicaciones."
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -131,22 +158,27 @@ fun LocationsScreen(
                 .background(MaterialTheme.colorScheme.background)
                 .padding(20.dp)
         ) {
-            TextButton(
-                onClick = onBackClick
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
             ) {
-                Text(text = "Volver")
+                TextButton(
+                    onClick = onBackClick
+                ) {
+                    Text(text = "Volver")
+                }
+
+                Text(
+                    text = "Ubicaciones",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.End,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Text(
-                text = "Ubicaciones",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(modifier = Modifier.height(6.dp))
-
+            Spacer(modifier = Modifier.height(20.dp))
 
             OutlinedTextField(
                 value = searchText,
@@ -165,58 +197,84 @@ fun LocationsScreen(
 
             Spacer(modifier = Modifier.height(14.dp))
 
-            Button(
-                onClick = {
-                    editingLocation = null
-                    showLocationForm = true
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Agregar ubicación")
-            }
+            if (isAdmin) {
+                Button(
+                    onClick = {
+                        editingLocation = null
+                        showLocationForm = true
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Text(text = "Agregar ubicación")
+                }
 
-            Spacer(modifier = Modifier.height(14.dp))
+                Spacer(modifier = Modifier.height(14.dp))
+            } else {
+                Button(
+                    onClick = onLoginAdminClick,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Text(text = "Ingresar como admin")
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+            }
 
             selectedLocation?.let { location ->
                 SelectedLocationMap(
                     location = location,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(240.dp)
+                        .height(220.dp)
                 )
 
                 Spacer(modifier = Modifier.height(12.dp))
 
+                if (isAdmin) {
+                    Button(
+                        onClick = {
+                            assigningLocation = location
+                            showAssignDialog = true
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(18.dp)
+                    ) {
+                        Text(text = "Asignar a Reparto/Vendedor")
+                    }
 
-                Button(
-                    onClick = {
-                        assigningLocation = location
-                        showAssignDialog = true
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Asignar a Reparto/Vendedor")
+                    Spacer(modifier = Modifier.height(14.dp))
                 }
+            }
 
-                Spacer(modifier = Modifier.height(14.dp))
+            if (errorMessage != null) {
+                Text(
+                    text = errorMessage ?: "",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "Listado",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
                 )
 
                 Text(
                     text = "${filteredLocations.size} de ${locations.size}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.End
                 )
             }
 
@@ -228,14 +286,6 @@ fun LocationsScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .weight(1f)
-                    )
-                }
-
-                errorMessage != null -> {
-                    Text(
-                        text = errorMessage ?: "",
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium
                     )
                 }
 
@@ -272,6 +322,7 @@ fun LocationsScreen(
                             LocationListItem(
                                 location = location,
                                 isSelected = selectedLocation?.id == location.id,
+                                isAdmin = isAdmin,
                                 onClick = {
                                     selectedLocation = location
                                 },
@@ -337,10 +388,10 @@ fun LocationsScreen(
                 locationToDeactivate = null
             },
             title = {
-                Text("Desactivar ubicación")
+                Text(text = "Desactivar ubicación")
             },
             text = {
-                Text("¿Seguro que querés desactivar ${location.name}?")
+                Text(text = "¿Seguro que querés desactivar ${location.name}?")
             },
             confirmButton = {
                 TextButton(
@@ -353,7 +404,10 @@ fun LocationsScreen(
                                     locationsRepository.getAllActiveLocations()
                                 }
 
-                                selectedLocation = null
+                                if (selectedLocation?.id == location.id) {
+                                    selectedLocation = null
+                                }
+
                                 locationToDeactivate = null
                             } catch (e: Exception) {
                                 errorMessage = e.message ?: "No se pudo desactivar la ubicación."
@@ -361,7 +415,7 @@ fun LocationsScreen(
                         }
                     }
                 ) {
-                    Text("Desactivar")
+                    Text(text = "Desactivar")
                 }
             },
             dismissButton = {
@@ -370,7 +424,7 @@ fun LocationsScreen(
                         locationToDeactivate = null
                     }
                 ) {
-                    Text("Cancelar")
+                    Text(text = "Cancelar")
                 }
             }
         )
@@ -394,6 +448,8 @@ fun LocationsScreen(
 
                             showAssignDialog = false
                             assigningLocation = null
+
+                            reloadLocations()
                         } catch (e: Exception) {
                             errorMessage = e.message ?: "No se pudieron guardar las asignaciones."
                         }
@@ -402,13 +458,13 @@ fun LocationsScreen(
             )
         }
     }
-
 }
 
 @Composable
 private fun LocationListItem(
     location: SavedLocation,
     isSelected: Boolean,
+    isAdmin: Boolean,
     onClick: () -> Unit,
     onEditClick: () -> Unit,
     onDeactivateClick: () -> Unit,
@@ -432,35 +488,33 @@ private fun LocationListItem(
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(
-                modifier = Modifier.padding(end = 10.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center
-            ) {
-                IconButton(
-                    onClick = onEditClick,
-                    modifier = Modifier.size(40.dp)
+            if (isAdmin) {
+                Column(
+                    modifier = Modifier.padding(end = 10.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Edit,
-                        contentDescription = "Editar ubicación",
-                        tint = if (isSelected) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.primary
-                        }
-                    )
-                }
+                    IconButton(
+                        onClick = onEditClick,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = "Editar ubicación",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
 
-                IconButton(
-                    onClick = onDeactivateClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Remove,
-                        contentDescription = "Desactivar ubicación",
-                        tint = MaterialTheme.colorScheme.error
-                    )
+                    IconButton(
+                        onClick = onDeactivateClick,
+                        modifier = Modifier.size(40.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Remove,
+                            contentDescription = "Desactivar ubicación",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
 
@@ -512,6 +566,7 @@ private fun LocationListItem(
         }
     }
 }
+
 @Composable
 private fun SelectedLocationMap(
     location: SavedLocation,
@@ -597,6 +652,7 @@ private fun SelectedLocationMap(
         }
     }
 }
+
 @Composable
 private fun LoadingLocationsList(
     modifier: Modifier = Modifier
@@ -646,6 +702,7 @@ private fun EmptyLocationsList(
         )
     }
 }
+
 private fun openLocationInGoogleMaps(
     context: Context,
     location: SavedLocation
