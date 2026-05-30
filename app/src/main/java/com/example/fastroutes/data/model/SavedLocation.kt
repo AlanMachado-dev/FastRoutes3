@@ -14,7 +14,10 @@ data class SavedLocation(
     val active: Boolean = true,
 
     @SerialName("created_at")
-    val createdAt: String? = null
+    val createdAt: String? = null,
+
+    @SerialName("route_option_id")
+    val routeOptionId: String? = null
 ) {
     fun toLatLng(): LatLng {
         return LatLng(latitude, longitude)

@@ -43,6 +43,9 @@ import kotlinx.coroutines.withContext
 
 @Composable
 fun AddLocationsScreen(
+    routeOptionId: String,
+    routeTitle: String,
+    autoSelectAll: Boolean = false,
     onBackClick: () -> Unit,
     onCalculateRouteClick: (List<SavedLocation>) -> Unit,
     modifier: Modifier = Modifier
@@ -71,16 +74,22 @@ fun AddLocationsScreen(
         mutableStateOf<String?>(null)
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(routeOptionId, autoSelectAll) {
         isLoading = true
         errorMessage = null
 
         try {
             val result = withContext(Dispatchers.IO) {
-                locationsRepository.getActiveLocations()
+                locationsRepository.getActiveLocationsByRouteOption(routeOptionId)
             }
 
             availableLocations = result
+
+            selectedLocationIds = if (autoSelectAll) {
+                result.map { it.id }
+            } else {
+                emptyList()
+            }
         } catch (e: Exception) {
             errorMessage = e.message ?: "No se pudieron cargar las ubicaciones."
         } finally {
@@ -135,7 +144,7 @@ fun AddLocationsScreen(
             Spacer(modifier = Modifier.height(12.dp))
 
             Text(
-                text = "Seleccionar ubicaciones",
+                text = routeTitle,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold
             )
@@ -195,6 +204,31 @@ fun AddLocationsScreen(
             }
 
             Spacer(modifier = Modifier.height(10.dp))
+            if (autoSelectAll && availableLocations.isNotEmpty()) {
+                val allSelected = selectedLocationIds.size == availableLocations.size
+
+                OutlinedButton(
+                    onClick = {
+                        selectedLocationIds = if (allSelected) {
+                            emptyList()
+                        } else {
+                            availableLocations.map { it.id }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Text(
+                        text = if (allSelected) {
+                            "Deseleccionar todas"
+                        } else {
+                            "Seleccionar todas"
+                        }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+            }
 
             when {
                 isLoading -> {

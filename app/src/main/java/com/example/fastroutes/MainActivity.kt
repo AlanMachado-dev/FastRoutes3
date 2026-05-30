@@ -43,6 +43,9 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import com.example.fastroutes.data.model.RouteOption
+import com.example.fastroutes.ui.screens.LocationsScreen
+import androidx.activity.compose.BackHandler
 
 class MainActivity : ComponentActivity() {
 
@@ -106,6 +109,35 @@ private fun FastRoutesApp() {
 
     var pendingSelectedLocations by remember {
         mutableStateOf<List<SavedLocation>>(emptyList())
+    }
+    var selectedRouteOption by remember {
+        mutableStateOf<RouteOption?>(null)
+    }
+
+    fun goBack() {
+        when (currentScreen) {
+            AppScreen.Home -> {
+                // Si ya estás en Home, no hacemos nada.
+                // Si quisieras cerrar la app desde Home, habría que manejarlo aparte.
+            }
+
+            AppScreen.Locations -> {
+                currentScreen = AppScreen.Home
+            }
+
+            AppScreen.AddLocations -> {
+                currentScreen = AppScreen.Home
+            }
+
+            AppScreen.MapRoute -> {
+                currentScreen = AppScreen.AddLocations
+            }
+        }
+    }
+    BackHandler(
+        enabled = currentScreen != AppScreen.Home
+    ) {
+        goBack()
     }
 
     fun calculateRouteFromCurrentLocation(
@@ -227,27 +259,43 @@ private fun FastRoutesApp() {
         modifier = Modifier.fillMaxSize()
     ) {
         when (currentScreen) {
+            AppScreen.Locations -> {
+                LocationsScreen(
+                    onBackClick = {
+                        goBack()
+                    }
+                )
+            }
             AppScreen.Home -> {
                 HomeScreen(
-                    onAddLocationsClick = {
+                    onRouteOptionClick = { routeOption ->
+                        selectedRouteOption = routeOption
                         currentScreen = AppScreen.AddLocations
                     },
-                    onMapClick = {
-                        currentScreen = AppScreen.MapRoute
-                    },
-                    onHistoryClick = {}
+                    onLocationsClick = {
+                        currentScreen = AppScreen.Locations
+                    }
                 )
             }
 
             AppScreen.AddLocations -> {
-                AddLocationsScreen(
-                    onBackClick = {
-                        currentScreen = AppScreen.Home
-                    },
-                    onCalculateRouteClick = { selectedLocations ->
-                        startRouteCalculation(selectedLocations)
-                    }
-                )
+                val routeOption = selectedRouteOption
+
+                if (routeOption == null) {
+                    currentScreen = AppScreen.Home
+                } else {
+                    AddLocationsScreen(
+                        routeOptionId = routeOption.id,
+                        routeTitle = routeOption.name,
+                        autoSelectAll = routeOption.type == "REPARTO_LECHE",
+                        onBackClick = {
+                            goBack()
+                        },
+                        onCalculateRouteClick = { selectedLocations ->
+                            startRouteCalculation(selectedLocations)
+                        }
+                    )
+                }
             }
 
             AppScreen.MapRoute -> {
@@ -258,7 +306,7 @@ private fun FastRoutesApp() {
                     currentSegmentIndex = currentNavigationSegmentIndex,
                     totalSegments = navigationSegments.size,
                     onBackClick = {
-                        currentScreen = AppScreen.Home
+                        goBack()
                     },
                     onEditLocationsClick = {
                         currentScreen = AppScreen.AddLocations
@@ -528,5 +576,6 @@ private fun distanceKm(
 private enum class AppScreen {
     Home,
     AddLocations,
+    Locations,
     MapRoute
 }
