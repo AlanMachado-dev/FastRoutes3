@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
 }
 
+
 val localProperties = Properties()
 val localPropertiesFile = rootProject.file("local.properties")
 
@@ -70,6 +71,11 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
 
+    implementation(platform("com.google.firebase:firebase-bom:34.14.0"))
+
+    implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-firestore")
+
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.10.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.10.0")
     implementation("androidx.navigation:navigation-compose:2.9.5")
@@ -89,6 +95,7 @@ dependencies {
     implementation("io.ktor:ktor-client-android")
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.10.2")
 
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

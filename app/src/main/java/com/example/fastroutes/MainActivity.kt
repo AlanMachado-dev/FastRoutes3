@@ -37,7 +37,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.fastroutes.data.model.RouteOption
 import com.example.fastroutes.data.model.SavedLocation
-import com.example.fastroutes.data.repository.AuthRepository
+import com.example.fastroutes.AuthRepository
 import com.example.fastroutes.location.CurrentLocationProvider
 import com.example.fastroutes.network.RoutesApiService
 import com.example.fastroutes.network.buildComputeRoutesRequest
@@ -88,7 +88,7 @@ private fun FastRoutesApp() {
     )
 
     var currentScreen by remember {
-        mutableStateOf(AppScreen.Home)
+        mutableStateOf(AppScreen.CheckingLogin)
     }
 
     var selectedRouteOption by remember {
@@ -132,25 +132,36 @@ private fun FastRoutesApp() {
     }
 
     LaunchedEffect(Unit) {
-        isAdmin = try {
-            authRepository.isAdminLoggedIn()
-        } catch (e: Exception) {
-            false
+        val result = authRepository.checkCurrentUser()
+
+        result.onSuccess { appUser ->
+            isAdmin = appUser.role == "admin"
+            currentScreen = AppScreen.Home
+        }
+
+        result.onFailure {
+            authRepository.logout()
+            isAdmin = false
+            currentScreen = AppScreen.LoginApp
         }
     }
 
     fun goBack() {
         when (currentScreen) {
+            AppScreen.CheckingLogin -> {
+                // No hacemos nada mientras verifica acceso.
+            }
+
+            AppScreen.LoginApp -> {
+                // Login obligatorio: no permitimos volver a la app sin iniciar sesión.
+            }
+
             AppScreen.Home -> {
                 // En Home no hacemos nada.
             }
 
             AppScreen.Locations -> {
                 currentScreen = AppScreen.Home
-            }
-
-            AppScreen.LoginAdmin -> {
-                currentScreen = AppScreen.Locations
             }
 
             AppScreen.AddLocations -> {
@@ -164,7 +175,9 @@ private fun FastRoutesApp() {
     }
 
     BackHandler(
-        enabled = currentScreen != AppScreen.Home
+        enabled = currentScreen != AppScreen.Home &&
+                currentScreen != AppScreen.LoginApp &&
+                currentScreen != AppScreen.CheckingLogin
     ) {
         goBack()
     }
@@ -266,6 +279,35 @@ private fun FastRoutesApp() {
         modifier = Modifier.fillMaxSize()
     ) {
         when (currentScreen) {
+            AppScreen.CheckingLogin -> {
+                LoadingAccessScreen()
+            }
+
+            AppScreen.LoginApp -> {
+                LoginScreen(
+                    onBackClick = {
+                        // Login obligatorio: no vuelve a ninguna pantalla.
+                    },
+                    onLoginSuccess = {
+                        coroutineScope.launch {
+                            val result = authRepository.checkCurrentUser()
+
+                            result.onSuccess { appUser ->
+                                isAdmin = appUser.role == "admin"
+                                currentScreen = AppScreen.Home
+                            }
+
+                            result.onFailure { error ->
+                                authRepository.logout()
+                                isAdmin = false
+                                errorMessage = error.message ?: "No tenés acceso a FastRoutes."
+                                currentScreen = AppScreen.LoginApp
+                            }
+                        }
+                    }
+                )
+            }
+
             AppScreen.Home -> {
                 HomeScreen(
                     onRouteOptionClick = { routeOption ->
@@ -285,25 +327,14 @@ private fun FastRoutesApp() {
                         goBack()
                     },
                     onLoginAdminClick = {
-                        currentScreen = AppScreen.LoginAdmin
+                        errorMessage = "Tu usuario no tiene permisos de administrador."
                     },
                     onLogoutAdminClick = {
                         coroutineScope.launch {
                             authRepository.logout()
                             isAdmin = false
+                            currentScreen = AppScreen.LoginApp
                         }
-                    }
-                )
-            }
-
-            AppScreen.LoginAdmin -> {
-                LoginScreen(
-                    onBackClick = {
-                        currentScreen = AppScreen.Locations
-                    },
-                    onLoginSuccess = {
-                        isAdmin = true
-                        currentScreen = AppScreen.Locations
                     }
                 )
             }
@@ -414,6 +445,35 @@ private fun LoadingRouteOverlay() {
 
             Text(
                 text = "Calculando ruta desde tu ubicación actual...",
+                modifier = Modifier.padding(top = 14.dp),
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    }
+}
+
+@Composable
+private fun LoadingAccessScreen() {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.15f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            modifier = Modifier
+                .background(
+                    color = MaterialTheme.colorScheme.surface,
+                    shape = MaterialTheme.shapes.large
+                )
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator()
+
+            Text(
+                text = "Verificando acceso a FastRoutes...",
                 modifier = Modifier.padding(top = 14.dp),
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -597,9 +657,10 @@ private fun openGoogleMapsRoute(
 }
 
 private enum class AppScreen {
+    CheckingLogin,
+    LoginApp,
     Home,
     AddLocations,
     Locations,
-    LoginAdmin,
     MapRoute
 }
