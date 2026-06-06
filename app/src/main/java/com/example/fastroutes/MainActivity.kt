@@ -1,5 +1,7 @@
 package com.example.fastroutes
 
+
+import com.example.fastroutes.data.repository.AuthRepository
 import android.Manifest
 import android.content.ActivityNotFoundException
 import android.content.Context
@@ -37,7 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.fastroutes.data.model.RouteOption
 import com.example.fastroutes.data.model.SavedLocation
-import com.example.fastroutes.AuthRepository
+import com.google.firebase.FirebaseApp
 import com.example.fastroutes.location.CurrentLocationProvider
 import com.example.fastroutes.network.RoutesApiService
 import com.example.fastroutes.network.buildComputeRoutesRequest
@@ -58,6 +60,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        FirebaseApp.initializeApp(this)
 
         setContent {
             MaterialTheme {
