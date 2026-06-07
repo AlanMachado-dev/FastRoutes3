@@ -324,9 +324,6 @@ private fun FastRoutesApp() {
 
             AppScreen.LoginApp -> {
                 LoginScreen(
-                    onBackClick = {
-                        // Login obligatorio: no vuelve a ninguna pantalla.
-                    },
                     onLoginSuccess = {
                         coroutineScope.launch {
                             val result = authRepository.checkCurrentUser()
