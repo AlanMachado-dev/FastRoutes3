@@ -225,6 +225,9 @@ private fun FastRoutesApp() {
                 val hoursByLocationId = locationsRepository.getLocationHoursByLocationIds(
                     locationIds = selectedLocations.map { location -> location.id }
                 )
+                if (hoursByLocationId.isEmpty()) {
+                    errorMessage = "Aviso: no se cargaron horarios desde Supabase. La ruta se calculará como si todos estuvieran abiertos."
+                }
 
                 val optimizationResult = optimizeStopsWithTimeWindows(
                     currentLocation = currentLocation,
@@ -661,7 +664,17 @@ private fun optimizeStopsWithTimeWindows(
             break
         }
 
-        val chosenCandidate = candidates.minBy { candidate ->
+        val readyCandidates = candidates.filter { candidate ->
+            candidate.waitMinutes <= 0
+        }
+
+        val candidatesToEvaluate = if (readyCandidates.isNotEmpty()) {
+            readyCandidates
+        } else {
+            candidates
+        }
+
+        val chosenCandidate = candidatesToEvaluate.minBy { candidate ->
             val futureRisk = calculateFutureClosingRisk(
                 currentPointAfterCandidate = candidate.location.toLatLng(),
                 currentTimeAfterCandidate = candidate.finishTime,
@@ -685,7 +698,16 @@ private fun optimizeStopsWithTimeWindows(
         skippedLocations = skippedLocations
     )
 }
+private sealed class ScheduleStatus {
+    data object NoSchedule : ScheduleStatus()
 
+    data class OpenWindow(
+        val openAt: ZonedDateTime,
+        val closeAt: ZonedDateTime
+    ) : ScheduleStatus()
+
+    data object ClosedToday : ScheduleStatus()
+}
 private fun buildVisitCandidate(
     currentPoint: LatLng,
     currentTime: ZonedDateTime,
@@ -702,79 +724,85 @@ private fun buildVisitCandidate(
     )
 
     val arrivalTime = currentTime.plusMinutes(travelMinutes)
-
-    val openingWindow = getOpeningWindowForDate(
-        hours = hours,
-        date = arrivalTime.toLocalDate(),
-        zoneId = arrivalTime.zone
-    )
-
     val serviceMinutes = location.serviceMinutes.coerceAtLeast(0).toLong()
 
-    if (openingWindow == null) {
-        val finishTime = arrivalTime.plusMinutes(serviceMinutes)
-
-        return VisitCandidate(
-            location = location,
-            travelMinutes = travelMinutes,
-            waitMinutes = 0,
-            arrivalTime = arrivalTime,
-            serviceStartTime = arrivalTime,
-            finishTime = finishTime,
-            score = travelMinutes.toDouble()
-        )
-    }
-
-    val serviceStartTime = if (arrivalTime.isBefore(openingWindow.openAt)) {
-        openingWindow.openAt
-    } else {
-        arrivalTime
-    }
-
-    val finishTime = serviceStartTime.plusMinutes(serviceMinutes)
-
-    if (finishTime.isAfter(openingWindow.closeAt)) {
-        return null
-    }
-
-    val waitMinutes = Duration.between(arrivalTime, serviceStartTime)
-        .toMinutes()
-        .coerceAtLeast(0)
-
-    val slackUntilClose = Duration.between(finishTime, openingWindow.closeAt)
-        .toMinutes()
-        .coerceAtLeast(0)
-
-    /*
-     * Score bajo = mejor candidato.
-     *
-     * travelMinutes: distancia/tiempo de viaje.
-     * waitMinutes: castiga ir demasiado temprano a un cliente cerrado.
-     * slackUntilClose: cuanto menos margen queda antes del cierre, más prioridad.
-     */
-    val urgencyPenalty = when {
-        slackUntilClose <= 15 -> -500.0
-        slackUntilClose <= 30 -> -250.0
-        slackUntilClose <= 60 -> -100.0
-        slackUntilClose <= 120 -> -30.0
-        else -> 0.0
-    }
-
-    val score =
-        travelMinutes * 1.0 +
-                waitMinutes * 1.5 +
-                slackUntilClose.coerceAtMost(240) * 0.08 +
-                urgencyPenalty
-
-    return VisitCandidate(
-        location = location,
-        travelMinutes = travelMinutes,
-        waitMinutes = waitMinutes,
-        arrivalTime = arrivalTime,
-        serviceStartTime = serviceStartTime,
-        finishTime = finishTime,
-        score = score
+    val scheduleStatus = getScheduleStatusForArrival(
+        hours = hours,
+        arrivalTime = arrivalTime
     )
+
+    return when (scheduleStatus) {
+        is ScheduleStatus.NoSchedule -> {
+            val finishTime = arrivalTime.plusMinutes(serviceMinutes)
+
+            VisitCandidate(
+                location = location,
+                travelMinutes = travelMinutes,
+                waitMinutes = 0,
+                arrivalTime = arrivalTime,
+                serviceStartTime = arrivalTime,
+                finishTime = finishTime,
+                score = travelMinutes.toDouble()
+            )
+        }
+
+        is ScheduleStatus.OpenWindow -> {
+            val serviceStartTime = if (arrivalTime.isBefore(scheduleStatus.openAt)) {
+                scheduleStatus.openAt
+            } else {
+                arrivalTime
+            }
+
+            val finishTime = serviceStartTime.plusMinutes(serviceMinutes)
+
+            if (finishTime.isAfter(scheduleStatus.closeAt)) {
+                return null
+            }
+
+            val waitMinutes = Duration.between(arrivalTime, serviceStartTime)
+                .toMinutes()
+                .coerceAtLeast(0)
+
+            val slackUntilClose = Duration.between(finishTime, scheduleStatus.closeAt)
+                .toMinutes()
+                .coerceAtLeast(0)
+
+            val urgencyPenalty = when {
+                slackUntilClose <= 15 -> -500.0
+                slackUntilClose <= 30 -> -250.0
+                slackUntilClose <= 60 -> -100.0
+                slackUntilClose <= 120 -> -30.0
+                else -> 0.0
+            }
+
+            val waitingPenalty = if (waitMinutes > 0) {
+                10_000.0 + waitMinutes * 10.0
+            } else {
+                0.0
+            }
+
+            val score =
+                travelMinutes * 1.0 +
+                        waitMinutes * 1.5 +
+                        slackUntilClose.coerceAtMost(240) * 0.08 +
+                        urgencyPenalty +
+                        waitingPenalty
+
+            VisitCandidate(
+                location = location,
+                travelMinutes = travelMinutes,
+                waitMinutes = waitMinutes,
+                arrivalTime = arrivalTime,
+                serviceStartTime = serviceStartTime,
+                finishTime = finishTime,
+                score = score
+            )
+        }
+
+        is ScheduleStatus.ClosedToday -> {
+            null
+        }
+    }
 }
 private fun calculateFutureClosingRisk(
     currentPointAfterCandidate: LatLng,
@@ -821,6 +849,56 @@ private fun calculateFutureClosingRisk(
     }
 
     return riskScore
+}
+
+private fun getScheduleStatusForArrival(
+    hours: List<LocationHour>,
+    arrivalTime: ZonedDateTime
+): ScheduleStatus {
+    if (hours.isEmpty()) {
+        return ScheduleStatus.NoSchedule
+    }
+
+    val dayOfWeek = arrivalTime.dayOfWeek.value
+
+    val dayHours = hours.firstOrNull { hour ->
+        hour.dayOfWeek == dayOfWeek
+    } ?: return ScheduleStatus.ClosedToday
+
+    if (dayHours.isClosed) {
+        return ScheduleStatus.ClosedToday
+    }
+
+    val openTimeText = dayHours.openTime
+    val closeTimeText = dayHours.closeTime
+
+    if (openTimeText.isNullOrBlank() || closeTimeText.isNullOrBlank()) {
+        return ScheduleStatus.ClosedToday
+    }
+
+    val openTime = parseSupabaseTime(openTimeText)
+    val closeTime = parseSupabaseTime(closeTimeText)
+
+    val openAt = ZonedDateTime.of(
+        arrivalTime.toLocalDate(),
+        openTime,
+        arrivalTime.zone
+    )
+
+    var closeAt = ZonedDateTime.of(
+        arrivalTime.toLocalDate(),
+        closeTime,
+        arrivalTime.zone
+    )
+
+    if (!closeTime.isAfter(openTime)) {
+        closeAt = closeAt.plusDays(1)
+    }
+
+    return ScheduleStatus.OpenWindow(
+        openAt = openAt,
+        closeAt = closeAt
+    )
 }
 
 private fun getOpeningWindowForDate(
