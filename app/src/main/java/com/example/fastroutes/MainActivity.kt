@@ -132,6 +132,10 @@ private fun FastRoutesApp() {
         mutableStateOf(0)
     }
 
+    var clickedNavigationSegmentIndexes by remember {
+        mutableStateOf<Set<Int>>(emptySet())
+    }
+
     var isLoading by remember {
         mutableStateOf(false)
     }
@@ -283,6 +287,7 @@ private fun FastRoutesApp() {
                 )
 
                 currentNavigationSegmentIndex = 0
+                clickedNavigationSegmentIndexes = emptySet()
                 currentScreen = AppScreen.MapRoute
             } catch (e: Exception) {
                 errorMessage = e.message ?: "Ocurrió un error al calcular la ruta."
@@ -402,28 +407,31 @@ private fun FastRoutesApp() {
                     stopPoints = stopPoints,
                     routePolylinePoints = routePolylinePoints,
                     locationNames = locationNames,
-                    currentSegmentIndex = currentNavigationSegmentIndex,
-                    totalSegments = navigationSegments.size,
+                    navigationSegments = navigationSegments,
+                    clickedSegmentIndexes = clickedNavigationSegmentIndexes,
                     onBackClick = {
                         goBack()
                     },
                     onEditLocationsClick = {
                         currentScreen = AppScreen.AddLocations
                     },
-                    onStartNavigationClick = {
-                        val currentSegment = navigationSegments.getOrNull(
-                            currentNavigationSegmentIndex
-                        )
+                    onOpenNavigationSegmentClick = { segmentIndex ->
+                        val selectedSegment = navigationSegments.getOrNull(segmentIndex)
 
-                        if (currentSegment == null) {
-                            errorMessage = "No hay más tramos disponibles."
+                        if (selectedSegment == null) {
+                            errorMessage = "No se encontró ese tramo."
                         } else {
                             openGoogleMapsRoute(
                                 context = context,
-                                points = currentSegment
+                                points = selectedSegment
                             )
 
-                            currentNavigationSegmentIndex += 1
+                            clickedNavigationSegmentIndexes =
+                                clickedNavigationSegmentIndexes + segmentIndex
+
+                            if (segmentIndex >= currentNavigationSegmentIndex) {
+                                currentNavigationSegmentIndex = segmentIndex + 1
+                            }
                         }
                     }
                 )

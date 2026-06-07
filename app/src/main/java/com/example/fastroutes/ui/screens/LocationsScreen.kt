@@ -210,16 +210,6 @@ fun LocationsScreen(
                 }
 
                 Spacer(modifier = Modifier.height(14.dp))
-            } else {
-                Button(
-                    onClick = onLoginAdminClick,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text(text = "Ingresar como admin")
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
             }
 
             selectedLocation?.let { location ->
