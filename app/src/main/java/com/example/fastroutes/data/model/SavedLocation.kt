@@ -13,6 +13,9 @@ data class SavedLocation(
     val longitude: Double,
     val active: Boolean = true,
 
+    @SerialName("service_minutes")
+    val serviceMinutes: Int = 5,
+
     @SerialName("created_at")
     val createdAt: String? = null,
 

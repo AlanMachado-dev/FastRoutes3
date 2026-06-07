@@ -1,6 +1,12 @@
 package com.example.fastroutes
 
-
+import com.example.fastroutes.data.model.LocationHour
+import com.example.fastroutes.data.repository.LocationsRepository
+import java.time.Duration
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import com.example.fastroutes.data.repository.AuthRepository
 import android.Manifest
 import android.content.ActivityNotFoundException
@@ -84,6 +90,9 @@ private fun FastRoutesApp() {
 
     val authRepository = remember {
         AuthRepository()
+    }
+    val locationsRepository = remember {
+        LocationsRepository()
     }
 
     val fixedDestination = LatLng(
@@ -213,13 +222,36 @@ private fun FastRoutesApp() {
                     return@launch
                 }
 
-                val orderedSelectedLocations = orderStopsByNearestNeighbor(
-                    currentLocation = currentLocation,
-                    selectedLocations = selectedLocations
+                val hoursByLocationId = locationsRepository.getLocationHoursByLocationIds(
+                    locationIds = selectedLocations.map { location -> location.id }
                 )
 
+                val optimizationResult = optimizeStopsWithTimeWindows(
+                    currentLocation = currentLocation,
+                    selectedLocations = selectedLocations,
+                    hoursByLocationId = hoursByLocationId,
+                    startTime = ZonedDateTime.now(ZoneId.of("America/Montevideo"))
+                )
+
+                val optimizedLocations = optimizationResult.orderedLocations
+
+                if (optimizedLocations.isEmpty()) {
+                    errorMessage = "No se pudo armar una ruta: ningún cliente seleccionado está disponible dentro de su horario."
+                    return@launch
+                }
+
+                if (optimizationResult.skippedLocations.isNotEmpty()) {
+                    errorMessage = buildString {
+                        append("No se pudieron incluir algunas ubicaciones por horario:\n\n")
+
+                        optimizationResult.skippedLocations.forEach { skipped ->
+                            append("- ${skipped.location.name}: ${skipped.reason}\n")
+                        }
+                    }
+                }
+
                 val pointsForRoute = listOf(currentLocation) +
-                        orderedSelectedLocations.map { location -> location.toLatLng() } +
+                        optimizedLocations.map { location -> location.toLatLng() } +
                         listOf(fixedDestination)
 
                 val decodedPolyline = computeRoutePolylineInChunks(
@@ -237,7 +269,7 @@ private fun FastRoutesApp() {
                 routePolylinePoints = decodedPolyline
 
                 locationNames = listOf("Mi ubicación actual") +
-                        orderedSelectedLocations.map { location ->
+                        optimizedLocations.map { location ->
                             location.address ?: location.name
                         } +
                         listOf("Destino final")
@@ -565,29 +597,228 @@ private fun splitRoutePoints(
     return chunks
 }
 
-private fun orderStopsByNearestNeighbor(
+private data class TimeWindowOptimizationResult(
+    val orderedLocations: List<SavedLocation>,
+    val skippedLocations: List<SkippedRouteLocation>
+)
+
+private data class SkippedRouteLocation(
+    val location: SavedLocation,
+    val reason: String
+)
+
+private data class VisitCandidate(
+    val location: SavedLocation,
+    val travelMinutes: Long,
+    val waitMinutes: Long,
+    val arrivalTime: ZonedDateTime,
+    val serviceStartTime: ZonedDateTime,
+    val finishTime: ZonedDateTime,
+    val score: Double
+)
+
+private data class OpeningWindow(
+    val openAt: ZonedDateTime,
+    val closeAt: ZonedDateTime
+)
+
+private fun optimizeStopsWithTimeWindows(
     currentLocation: LatLng,
-    selectedLocations: List<SavedLocation>
-): List<SavedLocation> {
+    selectedLocations: List<SavedLocation>,
+    hoursByLocationId: Map<String, List<LocationHour>>,
+    startTime: ZonedDateTime,
+    averageSpeedKmH: Double = 35.0
+): TimeWindowOptimizationResult {
     val pendingLocations = selectedLocations.toMutableList()
     val orderedLocations = mutableListOf<SavedLocation>()
+    val skippedLocations = mutableListOf<SkippedRouteLocation>()
 
     var currentPoint = currentLocation
+    var currentTime = startTime
 
     while (pendingLocations.isNotEmpty()) {
-        val nearestLocation = pendingLocations.minBy { location ->
-            distanceKm(
-                from = currentPoint,
-                to = location.toLatLng()
+        val candidates = pendingLocations.mapNotNull { location ->
+            buildVisitCandidate(
+                currentPoint = currentPoint,
+                currentTime = currentTime,
+                location = location,
+                hours = hoursByLocationId[location.id].orEmpty(),
+                averageSpeedKmH = averageSpeedKmH
             )
         }
 
-        orderedLocations.add(nearestLocation)
-        pendingLocations.remove(nearestLocation)
-        currentPoint = nearestLocation.toLatLng()
+        if (candidates.isEmpty()) {
+            pendingLocations.forEach { location ->
+                skippedLocations.add(
+                    SkippedRouteLocation(
+                        location = location,
+                        reason = "no se llega dentro del horario de hoy"
+                    )
+                )
+            }
+
+            pendingLocations.clear()
+            break
+        }
+
+        val chosenCandidate = candidates.minBy { candidate ->
+            candidate.score
+        }
+
+        orderedLocations.add(chosenCandidate.location)
+        pendingLocations.remove(chosenCandidate.location)
+
+        currentPoint = chosenCandidate.location.toLatLng()
+        currentTime = chosenCandidate.finishTime
     }
 
-    return orderedLocations
+    return TimeWindowOptimizationResult(
+        orderedLocations = orderedLocations,
+        skippedLocations = skippedLocations
+    )
+}
+
+private fun buildVisitCandidate(
+    currentPoint: LatLng,
+    currentTime: ZonedDateTime,
+    location: SavedLocation,
+    hours: List<LocationHour>,
+    averageSpeedKmH: Double
+): VisitCandidate? {
+    val travelMinutes = estimateTravelMinutes(
+        distanceKm = distanceKm(
+            from = currentPoint,
+            to = location.toLatLng()
+        ),
+        averageSpeedKmH = averageSpeedKmH
+    )
+
+    val arrivalTime = currentTime.plusMinutes(travelMinutes)
+
+    val openingWindow = getOpeningWindowForDate(
+        hours = hours,
+        date = arrivalTime.toLocalDate(),
+        zoneId = arrivalTime.zone
+    )
+
+    val serviceMinutes = location.serviceMinutes.coerceAtLeast(0).toLong()
+
+    if (openingWindow == null) {
+        val finishTime = arrivalTime.plusMinutes(serviceMinutes)
+
+        return VisitCandidate(
+            location = location,
+            travelMinutes = travelMinutes,
+            waitMinutes = 0,
+            arrivalTime = arrivalTime,
+            serviceStartTime = arrivalTime,
+            finishTime = finishTime,
+            score = travelMinutes.toDouble()
+        )
+    }
+
+    val serviceStartTime = if (arrivalTime.isBefore(openingWindow.openAt)) {
+        openingWindow.openAt
+    } else {
+        arrivalTime
+    }
+
+    val finishTime = serviceStartTime.plusMinutes(serviceMinutes)
+
+    if (finishTime.isAfter(openingWindow.closeAt)) {
+        return null
+    }
+
+    val waitMinutes = Duration.between(arrivalTime, serviceStartTime)
+        .toMinutes()
+        .coerceAtLeast(0)
+
+    val slackUntilClose = Duration.between(finishTime, openingWindow.closeAt)
+        .toMinutes()
+        .coerceAtLeast(0)
+
+    /*
+     * Score bajo = mejor candidato.
+     *
+     * travelMinutes: distancia/tiempo de viaje.
+     * waitMinutes: castiga ir demasiado temprano a un cliente cerrado.
+     * slackUntilClose: cuanto menos margen queda antes del cierre, más prioridad.
+     */
+    val score = travelMinutes +
+            waitMinutes +
+            slackUntilClose.coerceAtMost(240) * 0.25
+
+    return VisitCandidate(
+        location = location,
+        travelMinutes = travelMinutes,
+        waitMinutes = waitMinutes,
+        arrivalTime = arrivalTime,
+        serviceStartTime = serviceStartTime,
+        finishTime = finishTime,
+        score = score
+    )
+}
+
+private fun getOpeningWindowForDate(
+    hours: List<LocationHour>,
+    date: LocalDate,
+    zoneId: ZoneId
+): OpeningWindow? {
+    if (hours.isEmpty()) {
+        return null
+    }
+
+    val dayOfWeek = date.dayOfWeek.value
+
+    val dayHours = hours.firstOrNull { hour ->
+        hour.dayOfWeek == dayOfWeek
+    } ?: return null
+
+    if (dayHours.isClosed) {
+        return null
+    }
+
+    val openTimeText = dayHours.openTime ?: return null
+    val closeTimeText = dayHours.closeTime ?: return null
+
+    val openTime = parseSupabaseTime(openTimeText)
+    val closeTime = parseSupabaseTime(closeTimeText)
+
+    val openAt = ZonedDateTime.of(date, openTime, zoneId)
+
+    var closeAt = ZonedDateTime.of(date, closeTime, zoneId)
+
+    if (!closeTime.isAfter(openTime)) {
+        closeAt = closeAt.plusDays(1)
+    }
+
+    return OpeningWindow(
+        openAt = openAt,
+        closeAt = closeAt
+    )
+}
+
+private fun parseSupabaseTime(value: String): LocalTime {
+    val cleanValue = value.trim()
+
+    return if (cleanValue.length >= 8) {
+        LocalTime.parse(cleanValue.take(8))
+    } else {
+        LocalTime.parse(cleanValue)
+    }
+}
+
+private fun estimateTravelMinutes(
+    distanceKm: Double,
+    averageSpeedKmH: Double
+): Long {
+    if (distanceKm <= 0.0) {
+        return 1
+    }
+
+    return ((distanceKm / averageSpeedKmH) * 60)
+        .toLong()
+        .coerceAtLeast(1)
 }
 
 private fun distanceKm(

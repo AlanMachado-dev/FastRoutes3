@@ -1,5 +1,6 @@
 package com.example.fastroutes.data.repository
 
+import com.example.fastroutes.data.model.LocationHour
 import com.example.fastroutes.data.model.CreateLocationRequest
 import com.example.fastroutes.data.model.LocationRouteOptionRequest
 import com.example.fastroutes.data.model.SavedLocation
@@ -9,6 +10,7 @@ import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
 
 class LocationsRepository {
+
 
     private val supabase = SupabaseClientProvider.client
 
@@ -131,5 +133,23 @@ class LocationsRepository {
         supabase
             .from("location_route_options")
             .insert(assignments)
+    }
+    suspend fun getLocationHoursByLocationIds(
+        locationIds: List<String>
+    ): Map<String, List<LocationHour>> {
+        if (locationIds.isEmpty()) {
+            return emptyMap()
+        }
+
+        val locationIdSet = locationIds.toSet()
+
+        val allHours = supabase
+            .from("location_hours")
+            .select()
+            .decodeList<LocationHour>()
+
+        return allHours
+            .filter { hour -> hour.locationId in locationIdSet }
+            .groupBy { hour -> hour.locationId }
     }
 }
