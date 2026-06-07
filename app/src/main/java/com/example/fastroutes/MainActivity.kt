@@ -627,7 +627,7 @@ private fun optimizeStopsWithTimeWindows(
     selectedLocations: List<SavedLocation>,
     hoursByLocationId: Map<String, List<LocationHour>>,
     startTime: ZonedDateTime,
-    averageSpeedKmH: Double = 35.0
+    averageSpeedKmH: Double = 30.0
 ): TimeWindowOptimizationResult {
     val pendingLocations = selectedLocations.toMutableList()
     val orderedLocations = mutableListOf<SavedLocation>()
@@ -662,7 +662,15 @@ private fun optimizeStopsWithTimeWindows(
         }
 
         val chosenCandidate = candidates.minBy { candidate ->
-            candidate.score
+            val futureRisk = calculateFutureClosingRisk(
+                currentPointAfterCandidate = candidate.location.toLatLng(),
+                currentTimeAfterCandidate = candidate.finishTime,
+                pendingLocations = pendingLocations.filterNot { it.id == candidate.location.id },
+                hoursByLocationId = hoursByLocationId,
+                averageSpeedKmH = averageSpeedKmH
+            )
+
+            candidate.score + futureRisk
         }
 
         orderedLocations.add(chosenCandidate.location)
@@ -744,9 +752,19 @@ private fun buildVisitCandidate(
      * waitMinutes: castiga ir demasiado temprano a un cliente cerrado.
      * slackUntilClose: cuanto menos margen queda antes del cierre, más prioridad.
      */
-    val score = travelMinutes +
-            waitMinutes +
-            slackUntilClose.coerceAtMost(240) * 0.25
+    val urgencyPenalty = when {
+        slackUntilClose <= 15 -> -500.0
+        slackUntilClose <= 30 -> -250.0
+        slackUntilClose <= 60 -> -100.0
+        slackUntilClose <= 120 -> -30.0
+        else -> 0.0
+    }
+
+    val score =
+        travelMinutes * 1.0 +
+                waitMinutes * 1.5 +
+                slackUntilClose.coerceAtMost(240) * 0.08 +
+                urgencyPenalty
 
     return VisitCandidate(
         location = location,
@@ -757,6 +775,52 @@ private fun buildVisitCandidate(
         finishTime = finishTime,
         score = score
     )
+}
+private fun calculateFutureClosingRisk(
+    currentPointAfterCandidate: LatLng,
+    currentTimeAfterCandidate: ZonedDateTime,
+    pendingLocations: List<SavedLocation>,
+    hoursByLocationId: Map<String, List<LocationHour>>,
+    averageSpeedKmH: Double
+): Double {
+    var riskScore = 0.0
+
+    pendingLocations.forEach { location ->
+        val travelMinutes = estimateTravelMinutes(
+            distanceKm = distanceKm(
+                from = currentPointAfterCandidate,
+                to = location.toLatLng()
+            ),
+            averageSpeedKmH = averageSpeedKmH
+        )
+
+        val estimatedArrival = currentTimeAfterCandidate.plusMinutes(travelMinutes)
+
+        val openingWindow = getOpeningWindowForDate(
+            hours = hoursByLocationId[location.id].orEmpty(),
+            date = estimatedArrival.toLocalDate(),
+            zoneId = estimatedArrival.zone
+        )
+
+        if (openingWindow != null) {
+            val serviceMinutes = location.serviceMinutes.coerceAtLeast(0).toLong()
+            val estimatedFinish = estimatedArrival.plusMinutes(serviceMinutes)
+
+            val minutesUntilClose = Duration
+                .between(estimatedFinish, openingWindow.closeAt)
+                .toMinutes()
+
+            riskScore += when {
+                minutesUntilClose < 0 -> 10_000.0
+                minutesUntilClose <= 15 -> 1_000.0
+                minutesUntilClose <= 30 -> 500.0
+                minutesUntilClose <= 60 -> 150.0
+                else -> 0.0
+            }
+        }
+    }
+
+    return riskScore
 }
 
 private fun getOpeningWindowForDate(
@@ -816,9 +880,19 @@ private fun estimateTravelMinutes(
         return 1
     }
 
-    return ((distanceKm / averageSpeedKmH) * 60)
+    /*
+     * routeFactor compensa que la distancia en línea recta casi siempre
+     * es menor que el recorrido real por calles.
+     *
+     * 1.35 = suma aprox. 35% extra al recorrido.
+     */
+    val routeFactor = 1.35
+
+    val estimatedRoadDistanceKm = distanceKm * routeFactor
+
+    return ((estimatedRoadDistanceKm / averageSpeedKmH) * 60)
         .toLong()
-        .coerceAtLeast(1)
+        .coerceAtLeast(2)
 }
 
 private fun distanceKm(
