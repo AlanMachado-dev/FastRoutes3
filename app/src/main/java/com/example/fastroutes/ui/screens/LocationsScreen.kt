@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,25 +15,33 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Place
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -44,10 +53,21 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.fastroutes.data.model.SavedLocation
 import com.example.fastroutes.data.repository.LocationsRepository
 import com.google.android.gms.maps.CameraUpdateFactory
@@ -60,6 +80,7 @@ import com.google.maps.android.compose.rememberCameraPositionState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.lazy.rememberLazyListState
 
 @Composable
 fun LocationsScreen(
@@ -74,6 +95,7 @@ fun LocationsScreen(
     }
 
     val coroutineScope = rememberCoroutineScope()
+    val listState = rememberLazyListState()
 
     var locations by remember {
         mutableStateOf<List<SavedLocation>>(emptyList())
@@ -147,184 +169,176 @@ fun LocationsScreen(
                 location.address.orEmpty().contains(searchText, ignoreCase = true)
     }
 
-    Scaffold(
-        modifier = modifier.fillMaxSize()
-    ) { innerPadding ->
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF031225),
+                        Color(0xFF06366F),
+                        Color(0xFF031225)
+                    )
+                )
+            )
+    ) {
+        FastRoutesLocationsBackground()
 
-        Column(
+        LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-                .background(MaterialTheme.colorScheme.background)
-                .padding(20.dp)
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .padding(horizontal = 20.dp),
+            contentPadding = PaddingValues(
+                top = 18.dp,
+                bottom = 28.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                TextButton(
-                    onClick = onBackClick
-                ) {
-                    Text(text = "Volver")
-                }
-
-                Text(
-                    text = "Ubicaciones",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.End,
-                    modifier = Modifier.padding(top = 8.dp)
+            item {
+                LocationsHeader(
+                    title = "Ubicaciones",
+                    onBackClick = onBackClick
                 )
             }
 
-            Spacer(modifier = Modifier.height(20.dp))
-
-            OutlinedTextField(
-                value = searchText,
-                onValueChange = {
-                    searchText = it
-                },
-                modifier = Modifier.fillMaxWidth(),
-                label = {
-                    Text(text = "Buscar ubicación")
-                },
-                placeholder = {
-                    Text(text = "Buscar por nombre o dirección")
-                },
-                singleLine = true
-            )
-
-            Spacer(modifier = Modifier.height(14.dp))
+            item {
+                SearchLocationField(
+                    value = searchText,
+                    onValueChange = {
+                        searchText = it
+                    }
+                )
+            }
 
             if (isAdmin) {
-                Button(
-                    onClick = {
-                        editingLocation = null
-                        showLocationForm = true
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(18.dp)
-                ) {
-                    Text(text = "Agregar ubicación")
+                item {
+                    AdminActionsRow(
+                        isAdmin = isAdmin,
+                        onLoginAdminClick = onLoginAdminClick,
+                        onLogoutAdminClick = onLogoutAdminClick,
+                        onAddLocationClick = {
+                            editingLocation = null
+                            showLocationForm = true
+                        }
+                    )
                 }
-
-                Spacer(modifier = Modifier.height(14.dp))
             }
 
             selectedLocation?.let { location ->
-                SelectedLocationMap(
-                    location = location,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(220.dp)
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
+                item {
+                    SelectedLocationMap(
+                        location = location,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(330.dp)
+                    )
+                }
 
                 if (isAdmin) {
-                    Button(
-                        onClick = {
-                            assigningLocation = location
-                            showAssignDialog = true
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Text(text = "Asignar a Reparto/Vendedor")
+                    item {
+                        Button(
+                            onClick = {
+                                assigningLocation = location
+                                showAssignDialog = true
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(54.dp),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color(0xFF0078FF)
+                            )
+                        ) {
+                            Text(
+                                text = "Asignar a Reparto/Vendedor",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
                     }
-
-                    Spacer(modifier = Modifier.height(14.dp))
                 }
             }
 
-            if (errorMessage != null) {
-                Text(
-                    text = errorMessage ?: "",
-                    color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
+            errorMessage?.let { message ->
+                item {
+                    ErrorCard(message = message)
+                }
             }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Listado",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.weight(1f)
-                )
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Listado",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.weight(1f)
+                    )
 
-                Text(
-                    text = "${filteredLocations.size} de ${locations.size}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.End
-                )
+                    Text(
+                        text = "${filteredLocations.size} de ${locations.size}",
+                        color = Color(0xFF35B8FF),
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        textAlign = TextAlign.End
+                    )
+                }
             }
-
-            Spacer(modifier = Modifier.height(10.dp))
 
             when {
                 isLoading -> {
-                    LoadingLocationsList(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                    )
+                    item {
+                        LoadingLocationsList()
+                    }
                 }
 
                 locations.isEmpty() -> {
-                    EmptyLocationsList(
-                        message = "No hay ubicaciones cargadas.",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                    )
+                    item {
+                        EmptyLocationsList(
+                            message = "No hay ubicaciones cargadas."
+                        )
+                    }
                 }
 
                 filteredLocations.isEmpty() -> {
-                    EmptyLocationsList(
-                        message = "No se encontraron ubicaciones con esa búsqueda.",
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f)
-                    )
+                    item {
+                        EmptyLocationsList(
+                            message = "No se encontraron ubicaciones con esa búsqueda."
+                        )
+                    }
                 }
 
                 else -> {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .weight(1f),
-                        contentPadding = PaddingValues(vertical = 8.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        items(
-                            items = filteredLocations,
-                            key = { it.id }
-                        ) { location ->
-                            LocationListItem(
-                                location = location,
-                                isSelected = selectedLocation?.id == location.id,
-                                isAdmin = isAdmin,
-                                onClick = {
-                                    selectedLocation = location
-                                },
-                                onEditClick = {
-                                    editingLocation = location
-                                    showLocationForm = true
-                                },
-                                onDeactivateClick = {
-                                    locationToDeactivate = location
+                    items(
+                        items = filteredLocations,
+                        key = { it.id }
+                    ) { location ->
+                        LocationListItem(
+                            location = location,
+                            isSelected = selectedLocation?.id == location.id,
+                            isAdmin = isAdmin,
+                            onClick = {
+                                selectedLocation = location
+
+                                coroutineScope.launch {
+                                    listState.animateScrollToItem(index = 1)
                                 }
-                            )
-                        }
+                            },
+                            onEditClick = {
+                                editingLocation = location
+                                showLocationForm = true
+                            },
+                            onDeactivateClick = {
+                                locationToDeactivate = location
+                            }
+                        )
                     }
                 }
             }
@@ -451,6 +465,134 @@ fun LocationsScreen(
 }
 
 @Composable
+private fun LocationsHeader(
+    title: String,
+    onBackClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(58.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        TextButton(
+            onClick = onBackClick,
+            contentPadding = PaddingValues(horizontal = 0.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Outlined.ArrowBack,
+                contentDescription = "Volver",
+                tint = Color(0xFF35B8FF),
+                modifier = Modifier.size(24.dp)
+            )
+
+            Spacer(modifier = Modifier.size(6.dp))
+
+            Text(
+                text = "Volver",
+                color = Color(0xFF35B8FF),
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Text(
+            text = title,
+            color = Color.White,
+            fontSize = 31.sp,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.End,
+            maxLines = 1
+        )
+    }
+}
+
+@Composable
+private fun SearchLocationField(
+    value: String,
+    onValueChange: (String) -> Unit
+) {
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(62.dp),
+        shape = RoundedCornerShape(16.dp),
+        singleLine = true,
+        leadingIcon = {
+            Icon(
+                imageVector = Icons.Outlined.Search,
+                contentDescription = null,
+                tint = Color(0xFFB7C7DD),
+                modifier = Modifier.size(27.dp)
+            )
+        },
+        placeholder = {
+            Text(
+                text = "Buscar ubicación",
+                color = Color(0xFFB7C7DD),
+                fontSize = 17.sp
+            )
+        },
+        keyboardOptions = KeyboardOptions(
+            capitalization = KeyboardCapitalization.Words
+        ),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = Color(0xFF0078FF),
+            unfocusedBorderColor = Color(0xFF1E5FAF),
+            cursorColor = Color(0xFF35B8FF),
+            focusedTextColor = Color.White,
+            unfocusedTextColor = Color.White,
+            focusedContainerColor = Color(0xFF061B3A).copy(alpha = 0.55f),
+            unfocusedContainerColor = Color(0xFF061B3A).copy(alpha = 0.55f)
+        )
+    )
+}
+
+@Composable
+private fun AdminActionsRow(
+    isAdmin: Boolean,
+    onLoginAdminClick: () -> Unit,
+    onLogoutAdminClick: () -> Unit,
+    onAddLocationClick: () -> Unit
+) {
+    Column(
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Button(
+            onClick = onAddLocationClick,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp),
+            shape = RoundedCornerShape(18.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color(0xFF0078FF)
+            )
+        ) {
+            Text(
+                text = "Agregar ubicación",
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+        }
+
+        TextButton(
+            onClick = if (isAdmin) onLogoutAdminClick else onLoginAdminClick,
+            modifier = Modifier.align(Alignment.End)
+        ) {
+            Text(
+                text = if (isAdmin) "Cerrar admin" else "Modo admin",
+                color = Color(0xFF35B8FF),
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
+
+@Composable
 private fun LocationListItem(
     location: SavedLocation,
     isSelected: Boolean,
@@ -462,20 +604,27 @@ private fun LocationListItem(
 ) {
     Card(
         onClick = onClick,
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(if (isAdmin) 116.dp else 96.dp)
+            .shadow(
+                elevation = 12.dp,
+                shape = RoundedCornerShape(24.dp),
+                clip = false
+            ),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected) {
-                MaterialTheme.colorScheme.primaryContainer
+                Color(0xFF072B5F).copy(alpha = 0.96f)
             } else {
-                MaterialTheme.colorScheme.surfaceVariant
+                Color(0xFF061B3A).copy(alpha = 0.88f)
             }
         )
     ) {
         Row(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
+                .fillMaxSize()
+                .padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             if (isAdmin) {
@@ -486,40 +635,61 @@ private fun LocationListItem(
                 ) {
                     IconButton(
                         onClick = onEditClick,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Edit,
                             contentDescription = "Editar ubicación",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = Color(0xFF35B8FF)
                         )
                     }
 
                     IconButton(
                         onClick = onDeactivateClick,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Remove,
                             contentDescription = "Desactivar ubicación",
-                            tint = MaterialTheme.colorScheme.error
+                            tint = Color(0xFFFF6B6B)
                         )
                     }
                 }
             }
 
+            Box(
+                modifier = Modifier
+                    .size(58.dp)
+                    .background(
+                        brush = Brush.radialGradient(
+                            colors = listOf(
+                                Color(0xFF073B7A),
+                                Color(0xFF061B3A)
+                            )
+                        ),
+                        shape = CircleShape
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Place,
+                    contentDescription = null,
+                    tint = Color(0xFF35B8FF),
+                    modifier = Modifier.size(31.dp)
+                )
+            }
+
             Column(
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 16.dp, end = 8.dp)
             ) {
                 Text(
                     text = location.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    color = Color.White,
+                    fontSize = 19.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (isSelected) {
-                        MaterialTheme.colorScheme.onPrimaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                    maxLines = 1
                 )
 
                 if (!location.address.isNullOrBlank()) {
@@ -527,16 +697,13 @@ private fun LocationListItem(
 
                     Text(
                         text = location.address,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
+                        color = Color(0xFFB7C7DD),
+                        fontSize = 15.sp,
+                        maxLines = 1
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(7.dp))
 
                 Text(
                     text = if (isSelected) {
@@ -544,15 +711,23 @@ private fun LocationListItem(
                     } else {
                         "Tocar para ver en el mapa"
                     },
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
                     color = if (isSelected) {
-                        MaterialTheme.colorScheme.primary
+                        Color(0xFF35B8FF)
                     } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    }
+                        Color(0xFF8EA7C7)
+                    },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
                 )
             }
+
+            Icon(
+                imageVector = Icons.Outlined.ChevronRight,
+                contentDescription = "Abrir",
+                tint = Color(0xFF35B8FF),
+                modifier = Modifier.size(28.dp)
+            )
         }
     }
 }
@@ -580,37 +755,67 @@ private fun SelectedLocationMap(
     }
 
     Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(22.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
+        modifier = modifier.shadow(
+            elevation = 18.dp,
+            shape = RoundedCornerShape(26.dp),
+            clip = false
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+        shape = RoundedCornerShape(26.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF061B3A).copy(alpha = 0.92f)
+        )
     ) {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(14.dp),
-                verticalAlignment = Alignment.Top,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .height(92.dp)
+                    .padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                Box(
+                    modifier = Modifier
+                        .size(58.dp)
+                        .background(
+                            brush = Brush.radialGradient(
+                                colors = listOf(
+                                    Color(0xFF073B7A),
+                                    Color(0xFF061B3A)
+                                )
+                            ),
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.Place,
+                        contentDescription = null,
+                        tint = Color(0xFF35B8FF),
+                        modifier = Modifier.size(31.dp)
+                    )
+                }
+
                 Column(
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 16.dp)
                 ) {
                     Text(
                         text = location.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        color = Color.White,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1
                     )
 
                     if (!location.address.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(3.dp))
+                        Spacer(modifier = Modifier.height(4.dp))
 
                         Text(
                             text = location.address,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = Color(0xFFB7C7DD),
+                            fontSize = 15.sp,
+                            maxLines = 1
                         )
                     }
                 }
@@ -623,7 +828,19 @@ private fun SelectedLocationMap(
                         )
                     }
                 ) {
-                    Text(text = "Ver en Maps")
+                    Text(
+                        text = "Ver en Maps",
+                        color = Color(0xFF35B8FF),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+
+                    Icon(
+                        imageVector = Icons.Outlined.KeyboardArrowUp,
+                        contentDescription = null,
+                        tint = Color(0xFF35B8FF),
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
             }
 
@@ -639,58 +856,255 @@ private fun SelectedLocationMap(
                     snippet = location.address ?: "Ubicación cargada"
                 )
             }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .background(Color(0xFF061B3A).copy(alpha = 0.96f))
+                    .padding(horizontal = 18.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Place,
+                    contentDescription = null,
+                    tint = Color(0xFF35B8FF),
+                    modifier = Modifier.size(22.dp)
+                )
+
+                Spacer(modifier = Modifier.size(10.dp))
+
+                Text(
+                    text = "Ubicación seleccionada en el mapa",
+                    color = Color(0xFFB7C7DD),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun LoadingLocationsList(
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        CircularProgressIndicator()
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(
-            text = "Cargando ubicaciones...",
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+private fun LoadingLocationsList() {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(130.dp),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF061B3A).copy(alpha = 0.90f)
         )
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            CircularProgressIndicator(
+                color = Color(0xFF35B8FF)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Text(
+                text = "Cargando ubicaciones...",
+                color = Color(0xFFB7C7DD),
+                fontSize = 15.sp
+            )
+        }
     }
 }
 
 @Composable
 private fun EmptyLocationsList(
-    message: String,
-    modifier: Modifier = Modifier
+    message: String
 ) {
-    Column(
-        modifier = modifier,
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
-    ) {
-        HorizontalDivider(
-            modifier = Modifier.fillMaxWidth(0.45f)
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(130.dp),
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF061B3A).copy(alpha = 0.90f)
         )
+    ) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = message,
+                color = Color(0xFFB7C7DD),
+                fontSize = 15.sp,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 18.dp)
+            )
+        }
+    }
+}
 
-        Spacer(modifier = Modifier.height(16.dp))
-
+@Composable
+private fun ErrorCard(
+    message: String
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF331C25).copy(alpha = 0.95f)
+        )
+    ) {
         Text(
             text = message,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        HorizontalDivider(
-            modifier = Modifier.fillMaxWidth(0.45f)
+            modifier = Modifier.padding(18.dp),
+            color = Color(0xFFFF8A8A),
+            fontSize = 14.sp
         )
     }
+}
+
+@Composable
+private fun FastRoutesLocationsBackground() {
+    Canvas(
+        modifier = Modifier.fillMaxSize()
+    ) {
+        val width = size.width
+        val height = size.height
+
+        val mapLineColor = Color(0xFF1B6FD1).copy(alpha = 0.13f)
+        val routeColor = Color(0xFF00B8FF).copy(alpha = 0.46f)
+
+        drawLine(
+            color = mapLineColor,
+            start = Offset(-80f, height * 0.18f),
+            end = Offset(width * 0.58f, height * 0.04f),
+            strokeWidth = 5f
+        )
+
+        drawLine(
+            color = mapLineColor,
+            start = Offset(-40f, height * 0.68f),
+            end = Offset(width * 0.58f, height * 0.45f),
+            strokeWidth = 4f
+        )
+
+        drawLine(
+            color = mapLineColor,
+            start = Offset(width * 0.06f, height * 0.90f),
+            end = Offset(width * 0.88f, height * 0.68f),
+            strokeWidth = 4f
+        )
+
+        drawLine(
+            color = mapLineColor,
+            start = Offset(width * 0.18f, height),
+            end = Offset(width * 0.95f, height * 0.78f),
+            strokeWidth = 4f
+        )
+
+        val rightRoutePath = Path().apply {
+            moveTo(width * 0.88f, height * 0.02f)
+            cubicTo(
+                width * 0.76f,
+                height * 0.16f,
+                width * 1.08f,
+                height * 0.18f,
+                width * 0.90f,
+                height * 0.36f
+            )
+            cubicTo(
+                width * 0.76f,
+                height * 0.50f,
+                width * 0.58f,
+                height * 0.62f,
+                width * 0.88f,
+                height * 0.86f
+            )
+        }
+
+        drawPath(
+            path = rightRoutePath,
+            color = routeColor,
+            style = Stroke(
+                width = 4f,
+                pathEffect = PathEffect.dashPathEffect(
+                    intervals = floatArrayOf(22f, 18f),
+                    phase = 0f
+                )
+            )
+        )
+
+        val leftRoutePath = Path().apply {
+            moveTo(-40f, height * 0.57f)
+            cubicTo(
+                width * 0.12f,
+                height * 0.48f,
+                width * 0.22f,
+                height * 0.62f,
+                width * 0.02f,
+                height * 0.68f
+            )
+        }
+
+        drawPath(
+            path = leftRoutePath,
+            color = routeColor.copy(alpha = 0.32f),
+            style = Stroke(
+                width = 4f,
+                pathEffect = PathEffect.dashPathEffect(
+                    intervals = floatArrayOf(22f, 18f),
+                    phase = 0f
+                )
+            )
+        )
+
+        drawLocationPin(
+            center = Offset(width * 0.78f, height * 0.07f),
+            color = Color(0xFF0078FF)
+        )
+
+        drawLocationPin(
+            center = Offset(width * 0.93f, height * 0.23f),
+            color = Color(0xFF00D9E8)
+        )
+
+        drawLocationPin(
+            center = Offset(width * 0.86f, height * 0.88f),
+            color = Color(0xFF00D9E8)
+        )
+    }
+}
+
+private fun DrawScope.drawLocationPin(
+    center: Offset,
+    color: Color
+) {
+    drawCircle(
+        color = color.copy(alpha = 0.24f),
+        radius = 25f,
+        center = center
+    )
+
+    drawCircle(
+        color = color,
+        radius = 13f,
+        center = center
+    )
+
+    drawCircle(
+        color = Color(0xFF031225),
+        radius = 5f,
+        center = center
+    )
+
+    drawLine(
+        color = color,
+        start = Offset(center.x, center.y + 12f),
+        end = Offset(center.x, center.y + 40f),
+        strokeWidth = 8f,
+        cap = StrokeCap.Round
+    )
 }
 
 private fun openLocationInGoogleMaps(
